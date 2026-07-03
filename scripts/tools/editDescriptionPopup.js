@@ -1,6 +1,10 @@
 /**
  * Edit Description Popup - Handles UI for editing character descriptions using AI generation.
- * Simplified version of EditIntrosPopup: only custom instruction input, no preset options.
+ * Features:
+ *   - Display current character description (read-only)
+ *   - Custom instruction input with @{...} ping syntax
+ *   - "Show edit result after gen" checkbox with diff highlighting
+ *   - Collapsible guidebook with usage instructions
  */
 
 import {
@@ -42,12 +46,227 @@ function flushTemporaryInjection(context, id) {
     context.saveMetadataDebounced?.();
 }
 
-// Class to handle the popup functionality
+// ─── Hybrid line + word-level diff (LCS-based) ─────────────────────
+/**
+ * Generic LCS diff on any two arrays of strings.
+ * Returns array of { type: 'unchanged'|'added'|'removed', text: string }
+ */
+function computeLCS(oldArr, newArr) {
+    const m = oldArr.length;
+    const n = newArr.length;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (oldArr[i - 1] === newArr[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+    const result = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldArr[i - 1] === newArr[j - 1]) {
+            result.push({ type: 'unchanged', text: oldArr[i - 1] });
+            i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            result.push({ type: 'added', text: newArr[j - 1] });
+            j--;
+        } else {
+            result.push({ type: 'removed', text: oldArr[i - 1] });
+            i--;
+        }
+    }
+    return result.reverse();
+}
+
+/**
+ * Tokenize text into word, whitespace, and punctuation tokens for word-level diffing.
+ * This separates punctuation from words (e.g. "dã." -> "dã", ".") to improve diff accuracy.
+ */
+function tokenizeWords(text) {
+    return text.match(/[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}\s_]+/gu) || [];
+}
+
+/**
+ * Compute a line-by-line diff, then post-process to detect modified lines
+ * (consecutive removed+added pairs) and produce word-level inline diffs for them.
+ * Returns array of:
+ *   { type: 'unchanged', text }
+ *   { type: 'added', text }
+ *   { type: 'removed', text }
+ *   { type: 'modified', oldText, newText }  ← word-level diff rendered inline
+ */
+function computeLineDiff(oldText, newText) {
+    const oldLines = (oldText || '').split('\n');
+    const newLines = (newText || '').split('\n');
+    const rawDiff = computeLCS(oldLines, newLines);
+
+    // Post-process: group consecutive removed+added as 'modified'
+    const result = [];
+    let idx = 0;
+    while (idx < rawDiff.length) {
+        if (rawDiff[idx].type === 'unchanged') {
+            result.push(rawDiff[idx]);
+            idx++;
+        } else {
+            // Collect consecutive non-unchanged entries
+            const removedLines = [];
+            const addedLines = [];
+            while (idx < rawDiff.length && rawDiff[idx].type !== 'unchanged') {
+                if (rawDiff[idx].type === 'removed') removedLines.push(rawDiff[idx].text);
+                if (rawDiff[idx].type === 'added') addedLines.push(rawDiff[idx].text);
+                idx++;
+            }
+            if (removedLines.length > 0 && addedLines.length > 0) {
+                // Modified: pair them for word-level diff
+                result.push({
+                    type: 'modified',
+                    oldText: removedLines.join('\n'),
+                    newText: addedLines.join('\n'),
+                });
+            } else {
+                // Pure addition or pure removal
+                for (const line of removedLines) result.push({ type: 'removed', text: line });
+                for (const line of addedLines) result.push({ type: 'added', text: line });
+            }
+        }
+    }
+    return result;
+}
+
+/**
+ * Render word-level diff for a modified block into inline HTML.
+ * Unchanged text renders normally, removed words in red, added words in green.
+ */
+function renderModifiedHtml(oldText, newText) {
+    const oldTokens = tokenizeWords(oldText);
+    const newTokens = tokenizeWords(newText);
+    const wordDiff = computeLCS(oldTokens, newTokens);
+
+    return wordDiff.map(entry => {
+        const escaped = escapeHtml(entry.text);
+        switch (entry.type) {
+            case 'removed':
+                return `<span class="gg-diff-word-removed">${escaped}</span>`;
+            case 'added':
+                return `<span class="gg-diff-word-added">${escaped}</span>`;
+            default:
+                return escaped;
+        }
+    }).join('');
+}
+
+/**
+ * Render diff result into HTML string
+ */
+function renderDiffHtml(diffResult) {
+    const header = `<div class="gg-diff-header">
+        <span>📊 Diff View</span>
+        <span class="gg-diff-legend"><span class="gg-diff-legend-color gg-diff-legend-added"></span> Added</span>
+        <span class="gg-diff-legend"><span class="gg-diff-legend-color gg-diff-legend-removed"></span> Removed</span>
+    </div>`;
+
+    const lines = diffResult.map(entry => {
+        switch (entry.type) {
+            case 'added': {
+                const escaped = escapeHtml(entry.text || ' ');
+                return `<div class="gg-diff-line gg-diff-added"><span class="gg-diff-prefix">+</span>${escaped}</div>`;
+            }
+            case 'removed': {
+                const escaped = escapeHtml(entry.text || ' ');
+                return `<div class="gg-diff-line gg-diff-removed"><span class="gg-diff-prefix">−</span>${escaped}</div>`;
+            }
+            case 'modified': {
+                const inlineHtml = renderModifiedHtml(entry.oldText, entry.newText);
+                return `<div class="gg-diff-line gg-diff-modified"><span class="gg-diff-prefix">~</span>${inlineHtml}</div>`;
+            }
+            default: {
+                const escaped = escapeHtml(entry.text || ' ');
+                return `<div class="gg-diff-line gg-diff-unchanged"><span class="gg-diff-prefix"> </span>${escaped}</div>`;
+            }
+        }
+    }).join('');
+
+    return `${header}${lines}`;
+}
+
+function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ─── Ping parser ────────────────────────────────────────────────────
+/**
+ * Extract @{...} ping tokens from an instruction string.
+ * @param {string} instruction
+ * @returns {{ cleanInstruction: string, pings: string[] }}
+ */
+function extractPings(instruction) {
+    const pings = [];
+    const cleanInstruction = instruction.replace(/@\{([^}]+)\}/g, (match, content) => {
+        pings.push(content.trim());
+        return ''; // Remove from clean instruction
+    }).replace(/\s{2,}/g, ' ').trim();
+    return { cleanInstruction, pings };
+}
+
+
+// ─── Guidebook HTML ─────────────────────────────────────────────────
+const GUIDEBOOK_HTML = `
+<details class="gg-guidebook">
+    <summary>📖 Guidebook — How to use Edit Description</summary>
+    <div class="gg-guidebook-content">
+        <h4>🔹 Create New vs Edit Existing</h4>
+        <ul>
+            <li><strong>Create New</strong> — Generates an entirely new description from scratch based on your instruction. The current description is ignored.</li>
+            <li><strong>Edit Existing</strong> — Modifies the current description. The AI receives both your instruction and the existing description, and applies targeted changes.</li>
+        </ul>
+
+        <h4>🔹 Custom Instruction</h4>
+        <p>Write what you want in the textarea. Be specific about what to change or create. Examples:</p>
+        <ul>
+            <li><code>Make her hair color blue instead of red</code></li>
+            <li><code>Add a scar on the left cheek</code></li>
+            <li><code>Rewrite the personality to be more cheerful</code></li>
+        </ul>
+
+        <h4>🔹 Ping Syntax — <code>@{...}</code></h4>
+        <p>Use <code>@{detail}</code> to "pin" a specific part of the description for special handling:</p>
+        <ul>
+            <li><strong>With Edit Existing:</strong> The AI will ONLY modify the pinged detail(s) and keep everything else exactly as-is.</li>
+            <li><strong>With Create New:</strong> The AI will retain the pinged detail(s) in the new description.</li>
+        </ul>
+        <p><strong>Examples:</strong></p>
+        <ul>
+            <li><code>@{blue eyes} Change eye color to green</code> → Only the "blue eyes" part gets changed to green, rest untouched.</li>
+            <li><code>@{shy personality} @{wears glasses} Make a new energetic character</code> → New description will keep "shy personality" and "wears glasses" details.</li>
+        </ul>
+
+        <h4>🔹 Show Edit Result After Gen</h4>
+        <p>When this checkbox is ticked and you press <strong>Edit Existing</strong>:</p>
+        <ul>
+            <li>After generation completes, the modal reopens automatically.</li>
+            <li>The "Current Description" section shows a <strong>diff view</strong> comparing the old and new description.</li>
+            <li><span style="color:#3fb950;">Green lines (+)</span> = newly added content.</li>
+            <li><span style="color:#f85149;">Red lines (−)</span> = removed content.</li>
+            <li>Close the modal to dismiss the diff. Next open shows the description normally.</li>
+        </ul>
+        <p><em>Note: This does NOT trigger for "Create New" — only for "Edit Existing".</em></p>
+    </div>
+</details>
+`;
+
+
+// ─── Class ──────────────────────────────────────────────────────────
 export class EditDescriptionPopup {
     constructor() {
         this.popupElement = null;
         this.initialized = false;
         this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomDescCommand') || '';
+        this.showEditResult = sessionStorage.getItem('gg_showEditDescResult') === 'true';
+        this._previousDescription = null; // Stored before gen for diff
+        this._isDiffMode = false; // Currently showing diff?
     }
 
     /**
@@ -66,16 +285,33 @@ export class EditDescriptionPopup {
                             <span class="gg-popup-close">&times;</span>
                         </div>
                         <div class="gg-popup-body">
+                            <!-- Guidebook -->
+                            ${GUIDEBOOK_HTML}
+
+                            <!-- Current Description Section -->
+                            <div class="gg-popup-section gg-current-desc-section">
+                                <h3>Current Description</h3>
+                                <div id="gg-current-desc-display" class="gg-current-desc-container">
+                                    <span class="gg-current-desc-empty">No description available.</span>
+                                </div>
+                            </div>
+
                             <!-- Custom Command Section -->
                             <div class="gg-popup-section gg-custom-command-section">
                                 <h3>Custom Instruction</h3>
-                                <textarea id="gg-custom-edit-description-command" placeholder="Enter your instruction for generating/editing the character description...">${this.lastCustomCommand}</textarea>
+                                <textarea id="gg-custom-edit-description-command" placeholder="Enter your instruction for generating/editing the character description...&#10;&#10;Tip: Use @{detail} to pin specific parts (see Guidebook above).">${this.lastCustomCommand}</textarea>
                             </div>
                         </div>
-                        <div class="gg-popup-footer">
-                            <button id="ggCancelEditDescription" class="gg-button gg-button-secondary">Cancel</button>
-                            <button id="ggCreateNewDescription" class="gg-button gg-button-secondary">Create New</button>
-                            <button id="ggEditExistingDescription" class="gg-button gg-button-primary">Edit Existing</button>
+                        <div class="gg-popup-footer-wrap">
+                            <div class="gg-checkbox-row">
+                                <input type="checkbox" id="gg-show-edit-result-checkbox" ${this.showEditResult ? 'checked' : ''}>
+                                <label for="gg-show-edit-result-checkbox">Show edit result after gen</label>
+                            </div>
+                            <div class="gg-popup-footer">
+                                <button id="ggCancelEditDescription" class="gg-button gg-button-secondary">Cancel</button>
+                                <button id="ggCreateNewDescription" class="gg-button gg-button-secondary">Create New</button>
+                                <button id="ggEditExistingDescription" class="gg-button gg-button-primary">Edit Existing</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -106,6 +342,7 @@ export class EditDescriptionPopup {
         const cancelButton = this.popupElement.querySelector('#ggCancelEditDescription');
         const createNewButton = this.popupElement.querySelector('#ggCreateNewDescription');
         const editExistingButton = this.popupElement.querySelector('#ggEditExistingDescription');
+        const showEditResultCheckbox = this.popupElement.querySelector('#gg-show-edit-result-checkbox');
 
         // Close/Cancel Actions
         closeButton.addEventListener('click', () => this.close());
@@ -114,6 +351,74 @@ export class EditDescriptionPopup {
         // Generate Actions
         createNewButton.addEventListener('click', () => this.generateDescription('makeNew'));
         editExistingButton.addEventListener('click', () => this.generateDescription('editExisting'));
+
+        // Checkbox state persistence
+        showEditResultCheckbox.addEventListener('change', (e) => {
+            this.showEditResult = e.target.checked;
+            sessionStorage.setItem('gg_showEditDescResult', String(this.showEditResult));
+        });
+    }
+
+    /**
+     * Get current character description from SillyTavern's textarea
+     */
+    _getCurrentDescription() {
+        const descriptionTextarea = document.getElementById('description_textarea');
+        return descriptionTextarea ? descriptionTextarea.value.trim() : '';
+    }
+
+    /**
+     * Refresh the current description display in the popup
+     */
+    _refreshDescriptionDisplay() {
+        const displayEl = this.popupElement?.querySelector('#gg-current-desc-display');
+        if (!displayEl) return;
+
+        // If in diff mode, don't refresh — keep the diff view
+        if (this._isDiffMode) return;
+
+        const currentDesc = this._getCurrentDescription();
+        if (currentDesc) {
+            displayEl.innerHTML = '';
+            displayEl.textContent = currentDesc;
+            displayEl.classList.remove('gg-diff-view');
+        } else {
+            displayEl.innerHTML = '<span class="gg-current-desc-empty">No description available.</span>';
+            displayEl.classList.remove('gg-diff-view');
+        }
+    }
+
+    /**
+     * Show diff view in the description display
+     */
+    _showDiffView(oldDesc, newDesc) {
+        const displayEl = this.popupElement?.querySelector('#gg-current-desc-display');
+        if (!displayEl) return;
+
+        const diffResult = computeLineDiff(oldDesc, newDesc);
+        displayEl.innerHTML = renderDiffHtml(diffResult);
+        displayEl.classList.add('gg-diff-view');
+        this._isDiffMode = true;
+
+        // Update the section heading
+        const heading = this.popupElement.querySelector('.gg-current-desc-section h3');
+        if (heading) heading.textContent = 'Edit Result — Diff View';
+    }
+
+    /**
+     * Clear diff state and restore normal view
+     */
+    _clearDiffState() {
+        this._previousDescription = null;
+        this._isDiffMode = false;
+
+        // Restore heading
+        const heading = this.popupElement?.querySelector('.gg-current-desc-section h3');
+        if (heading) heading.textContent = 'Current Description';
+
+        // Remove diff-view class
+        const displayEl = this.popupElement?.querySelector('#gg-current-desc-display');
+        if (displayEl) displayEl.classList.remove('gg-diff-view');
     }
 
     /**
@@ -124,10 +429,29 @@ export class EditDescriptionPopup {
             this.init().then(() => {
                 if (this.popupElement) {
                     this.popupElement.style.display = 'block';
+                    this._refreshDescriptionDisplay();
                 }
             });
         } else if (this.popupElement) {
             this.popupElement.style.display = 'block';
+            this._refreshDescriptionDisplay();
+        }
+    }
+
+    /**
+     * Open the popup in diff mode (after generation)
+     */
+    _openWithDiff(oldDesc, newDesc) {
+        if (!this.initialized) {
+            this.init().then(() => {
+                if (this.popupElement) {
+                    this.popupElement.style.display = 'block';
+                    this._showDiffView(oldDesc, newDesc);
+                }
+            });
+        } else if (this.popupElement) {
+            this.popupElement.style.display = 'block';
+            this._showDiffView(oldDesc, newDesc);
         }
     }
 
@@ -138,6 +462,8 @@ export class EditDescriptionPopup {
         if (this.popupElement) {
             this.popupElement.style.display = 'none';
         }
+        // Always clear diff state on close
+        this._clearDiffState();
     }
 
     /**
@@ -156,8 +482,25 @@ export class EditDescriptionPopup {
         // Save the custom command for session recovery
         sessionStorage.setItem('gg_lastCustomDescCommand', instruction);
 
+        // Parse pings
+        const { cleanInstruction, pings } = extractPings(instruction);
+        const hasPings = pings.length > 0;
+
+        // Save previous description BEFORE closing (for diff view later)
+        const shouldShowResult = this.showEditResult && mode === 'editExisting';
+        const descriptionTextarea = document.getElementById('description_textarea');
+        const currentDescription = descriptionTextarea ? descriptionTextarea.value.trim() : '';
+        
+        if (shouldShowResult) {
+            this._previousDescription = currentDescription;
+        }
+
         // Close the popup immediately now that validation has passed
-        this.close();
+        // (Clear diff state so it doesn't interfere)
+        this._isDiffMode = false;
+        if (this.popupElement) {
+            this.popupElement.style.display = 'none';
+        }
 
         const presetValue = extension_settings[extensionName]?.presetEditDescription ?? '';
         const profileValue = extension_settings[extensionName]?.profileEditDescription ?? '';
@@ -169,16 +512,28 @@ export class EditDescriptionPopup {
                 return;
             }
 
-            // Get the current description from the textarea
-            const descriptionTextarea = document.getElementById('description_textarea');
-            const currentDescription = descriptionTextarea ? descriptionTextarea.value.trim() : '';
+            // Choose prompt template based on mode + ping presence
+            let promptKey;
+            if (hasPings) {
+                promptKey = mode === 'editExisting' ? 'editDescription.editExistingWithPing' : 'editDescription.makeNewWithPing';
+            } else {
+                promptKey = `editDescription.${mode}`;
+            }
 
-            // Get the prompt template from prompts.json based on mode
-            const promptTemplate = await getPromptValue(`editDescription.${mode}`, '');
-            const promptForModel = fillPromptTemplate(promptTemplate, {
-                instruction,
+            const promptTemplate = await getPromptValue(promptKey, '');
+
+            // Build template data
+            const templateData = {
+                instruction: hasPings ? cleanInstruction : instruction,
                 currentDescription: mode === 'editExisting' ? currentDescription : '',
-            });
+            };
+
+            // Add ping details if present
+            if (hasPings) {
+                templateData.pingDetails = pings.map((p, i) => `${i + 1}. "${p}"`).join('\n');
+            }
+
+            const promptForModel = fillPromptTemplate(promptTemplate, templateData);
 
             // Toggle send button state to show generation is happening
             setSendButtonState?.(true);
@@ -265,6 +620,13 @@ export class EditDescriptionPopup {
             } else {
                 console.error('[GuidedGenerations] #description_textarea not found in DOM.');
             }
+
+            // ── Show diff result if checkbox was ticked + Edit Existing mode ──
+            if (shouldShowResult && this._previousDescription !== null) {
+                const newDescription = generatedDescription.trim();
+                this._openWithDiff(this._previousDescription, newDescription);
+            }
+
         } catch (error) {
             console.error('[GuidedGenerations] Error executing Edit Description request:', error);
         }
