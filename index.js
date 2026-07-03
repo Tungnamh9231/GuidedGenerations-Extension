@@ -3,6 +3,7 @@ import { eventSource, saveSettingsDebounced } from '../../../../script.js'; // F
 
 // Import button logic from separate modules
 import { simpleSend } from './scripts/simpleSend.js';
+import { simpleSendCharacter } from './scripts/simpleSendCharacter.js';
 import { recoverInput } from './scripts/inputRecovery.js';
 import { guidedResponse } from './scripts/guidedResponse.js';
 import { guidedSwipe } from './scripts/guidedSwipe.js';
@@ -189,6 +190,7 @@ export const defaultSettings = {
     showGuidedResponse: true, // Default on for Guided Response
     showGuidedSwipe: true, // Default on for Guided Swipe
     showSimpleSendButton: false, // Individual tool button toggles
+    showSimpleSendCharacterButton: false,
     showRecoverInputButton: false,
     showEditIntrosButton: false,
     showEditDescriptionButton: false,
@@ -922,6 +924,17 @@ function updateExtensionButtons() {
             event.stopPropagation();
         });
 
+        const simpleSendCharacterMenuItem = document.createElement('a');
+        simpleSendCharacterMenuItem.href = '#';
+        simpleSendCharacterMenuItem.className = 'interactable';
+        simpleSendCharacterMenuItem.innerHTML = '<i class="fa-solid fa-user-ninja fa-fw"></i><span data-i18n="Simple Send: Character">Simple Send: Character</span>';
+        simpleSendCharacterMenuItem.title = "Sends the current input directly to the Chat as the Character without triggering a response.";
+        simpleSendCharacterMenuItem.addEventListener('click', (event) => {
+            simpleSendCharacter();
+            ggToolsMenu.classList.remove('shown');
+            event.stopPropagation();
+        });
+
         const recoverInputMenuItem = document.createElement('a');
         recoverInputMenuItem.href = '#';
         recoverInputMenuItem.className = 'interactable'; // Use interactable class
@@ -1075,6 +1088,7 @@ function updateExtensionButtons() {
 
         // Add original items first
         ggToolsMenu.appendChild(simpleSendMenuItem);
+        ggToolsMenu.appendChild(simpleSendCharacterMenuItem);
         ggToolsMenu.appendChild(recoverInputMenuItem);
         
         // Add a separator
@@ -1315,6 +1329,12 @@ function updateExtensionButtons() {
     if (settings.showSimpleSendButton) {
         const simpleSendButton = createActionButton('gg_simple_send_button', 'Simple Send', 'fa-solid fa-paper-plane', simpleSend);
         regularButtons.push(simpleSendButton);
+    }
+    
+    // Simple Send Character button
+    if (settings.showSimpleSendCharacterButton) {
+        const simpleSendCharacterButton = createActionButton('gg_simple_send_character_button', 'Simple Send: Character', 'fa-solid fa-user-ninja', simpleSendCharacter);
+        regularButtons.push(simpleSendCharacterButton);
     }
     
     // Recover Input button
@@ -1989,6 +2009,7 @@ async function checkVersionAndNotify() {
 // Expose functions to the global scope for buttons or STScripts
 window.GuidedGenerations = {
     simpleSend,
+    simpleSendCharacter,
     guidedSwipe,
     guidedContinue,
     undoLastGuidedAddition, // Expose new function
