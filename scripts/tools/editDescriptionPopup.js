@@ -287,19 +287,37 @@ export class EditDescriptionPopup {
                         <div class="gg-popup-body">
                             <!-- Guidebook -->
                             ${GUIDEBOOK_HTML}
-
-                            <!-- Current Description Section -->
-                            <div class="gg-popup-section gg-current-desc-section">
-                                <h3>Current Description</h3>
-                                <div id="gg-current-desc-display" class="gg-current-desc-container">
-                                    <span class="gg-current-desc-empty">No description available.</span>
-                                </div>
+                            
+                            <div class="gg-tabs" style="display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;">
+                                <button class="gg-tab-btn active" data-tab="normal" style="background: none; border: none; color: white; cursor: pointer; padding: 5px 10px; border-radius: 4px; font-weight: bold;">Normal</button>
+                                <button class="gg-tab-btn" data-tab="format" style="background: none; border: none; color: #ccc; cursor: pointer; padding: 5px 10px; border-radius: 4px;">Format</button>
                             </div>
 
-                            <!-- Custom Command Section -->
-                            <div class="gg-popup-section gg-custom-command-section">
-                                <h3>Custom Instruction</h3>
-                                <textarea id="gg-custom-edit-description-command" placeholder="Enter your instruction for generating/editing the character description...&#10;&#10;Tip: Use @{detail} to pin specific parts (see Guidebook above).">${this.lastCustomCommand}</textarea>
+                            <div id="gg-tab-normal" class="gg-tab-content active" style="display: block;">
+                                <!-- Current Description Section -->
+                                <div class="gg-popup-section gg-current-desc-section">
+                                    <h3>Current Description</h3>
+                                    <div id="gg-current-desc-display" class="gg-current-desc-container">
+                                        <span class="gg-current-desc-empty">No description available.</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Custom Command Section -->
+                                <div class="gg-popup-section gg-custom-command-section">
+                                    <h3>Custom Instruction</h3>
+                                    <textarea id="gg-custom-edit-description-command" placeholder="Enter your instruction for generating/editing the character description...&#10;&#10;Tip: Use @{detail} to pin specific parts (see Guidebook above).">${this.lastCustomCommand}</textarea>
+                                </div>
+                            </div>
+                            
+                            <div id="gg-tab-format" class="gg-tab-content" style="display: none;">
+                                <div class="gg-popup-section gg-format-section">
+                                    <h3>Format Fields</h3>
+                                    <p style="font-size: 0.9em; color: #aaa; margin-bottom: 10px;">Formats are only applied when using <strong>Create New</strong> in the Normal tab. Leave empty to use default prompt.</p>
+                                    <div id="gg-format-list" style="display: flex; flex-direction: column; gap: 10px;">
+                                        <!-- Dynamic fields go here -->
+                                    </div>
+                                    <button id="gg-add-format-btn" class="gg-button gg-button-secondary" style="margin-top: 10px; width: 100%; font-size: 1.2em;">+</button>
+                                </div>
                             </div>
                         </div>
                         <div class="gg-popup-footer-wrap">
@@ -309,6 +327,7 @@ export class EditDescriptionPopup {
                             </div>
                             <div class="gg-popup-footer">
                                 <button id="ggCancelEditDescription" class="gg-button gg-button-secondary">Cancel</button>
+                                <button id="ggCreateWorldDescription" class="gg-button gg-button-secondary">Create World</button>
                                 <button id="ggCreateNewDescription" class="gg-button gg-button-secondary">Create New</button>
                                 <button id="ggEditExistingDescription" class="gg-button gg-button-primary">Edit Existing</button>
                             </div>
@@ -341,6 +360,7 @@ export class EditDescriptionPopup {
         const closeButton = this.popupElement.querySelector('.gg-popup-close');
         const cancelButton = this.popupElement.querySelector('#ggCancelEditDescription');
         const createNewButton = this.popupElement.querySelector('#ggCreateNewDescription');
+        const createWorldButton = this.popupElement.querySelector('#ggCreateWorldDescription');
         const editExistingButton = this.popupElement.querySelector('#ggEditExistingDescription');
         const showEditResultCheckbox = this.popupElement.querySelector('#gg-show-edit-result-checkbox');
 
@@ -350,12 +370,69 @@ export class EditDescriptionPopup {
 
         // Generate Actions
         createNewButton.addEventListener('click', () => this.generateDescription('makeNew'));
+        createWorldButton.addEventListener('click', () => this.generateDescription('createWorld'));
         editExistingButton.addEventListener('click', () => this.generateDescription('editExisting'));
 
         // Checkbox state persistence
         showEditResultCheckbox.addEventListener('change', (e) => {
             this.showEditResult = e.target.checked;
             sessionStorage.setItem('gg_showEditDescResult', String(this.showEditResult));
+        });
+
+        // Tabs
+        const tabBtns = this.popupElement.querySelectorAll('.gg-tab-btn');
+        const tabContents = this.popupElement.querySelectorAll('.gg-tab-content');
+        const footerWrap = this.popupElement.querySelector('.gg-popup-footer-wrap');
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const targetTab = e.target.getAttribute('data-tab');
+                
+                // Update buttons
+                tabBtns.forEach(b => {
+                    b.classList.remove('active');
+                    b.style.fontWeight = 'normal';
+                    b.style.color = '#ccc';
+                });
+                e.target.classList.add('active');
+                e.target.style.fontWeight = 'bold';
+                e.target.style.color = 'white';
+                
+                // Update contents
+                tabContents.forEach(content => {
+                    content.style.display = content.id === `gg-tab-${targetTab}` ? 'block' : 'none';
+                    content.classList.toggle('active', content.id === `gg-tab-${targetTab}`);
+                });
+
+                // Toggle footer
+                if (footerWrap) {
+                    footerWrap.style.display = targetTab === 'format' ? 'none' : 'block';
+                }
+            });
+        });
+
+        // Format Fields
+        const addFormatBtn = this.popupElement.querySelector('#gg-add-format-btn');
+        const formatList = this.popupElement.querySelector('#gg-format-list');
+        
+        addFormatBtn.addEventListener('click', () => {
+            const formatItem = document.createElement('div');
+            formatItem.className = 'gg-format-item';
+            formatItem.style.cssText = 'display: flex; flex-direction: column; gap: 5px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; border: 1px solid #444;';
+            
+            formatItem.innerHTML = `
+                <div style="display: flex; gap: 10px; align-items: flex-start;">
+                    <textarea class="gg-format-value text_pole" placeholder="Format Template (e.g. name: )" style="flex: 1; resize: vertical; min-height: 40px;"></textarea>
+                    <button class="gg-button gg-button-secondary gg-remove-format-btn" style="min-width: 30px; padding: 0; height: 30px;" title="Remove Format">&times;</button>
+                </div>
+            `;
+            
+            formatList.appendChild(formatItem);
+        });
+
+        formatList.addEventListener('click', (e) => {
+            if (e.target.classList.contains('gg-remove-format-btn')) {
+                e.target.closest('.gg-format-item').remove();
+            }
         });
     }
 
@@ -502,6 +579,17 @@ export class EditDescriptionPopup {
             this.popupElement.style.display = 'none';
         }
 
+        // Get format list values
+        const formatItemElements = this.popupElement.querySelectorAll('.gg-format-item');
+        let formatListArray = [];
+        formatItemElements.forEach(item => {
+            const value = item.querySelector('.gg-format-value').value.trim();
+            if (value) {
+                formatListArray.push(value);
+            }
+        });
+        const formatList = formatListArray.join('\n\n');
+
         const presetValue = extension_settings[extensionName]?.presetEditDescription ?? '';
         const profileValue = extension_settings[extensionName]?.profileEditDescription ?? '';
 
@@ -512,12 +600,18 @@ export class EditDescriptionPopup {
                 return;
             }
 
-            // Choose prompt template based on mode + ping presence
+            // Choose prompt template based on mode + ping presence + format presence
             let promptKey;
-            if (hasPings) {
-                promptKey = mode === 'editExisting' ? 'editDescription.editExistingWithPing' : 'editDescription.makeNewWithPing';
+            if (mode === 'editExisting') {
+                promptKey = hasPings ? 'editDescription.editExistingWithPing' : 'editDescription.editExisting';
+            } else if (mode === 'createWorld') {
+                promptKey = hasPings ? 'editDescription.createWorldWithPing' : 'editDescription.createWorld';
             } else {
-                promptKey = `editDescription.${mode}`;
+                if (hasPings) {
+                    promptKey = formatList ? 'editDescription.makeNewWithPingFormat' : 'editDescription.makeNewWithPing';
+                } else {
+                    promptKey = formatList ? 'editDescription.makeNewWithFormat' : 'editDescription.makeNew';
+                }
             }
 
             const promptTemplate = await getPromptValue(promptKey, '');
@@ -526,6 +620,7 @@ export class EditDescriptionPopup {
             const templateData = {
                 instruction: hasPings ? cleanInstruction : instruction,
                 currentDescription: mode === 'editExisting' ? currentDescription : '',
+                formatList: formatList
             };
 
             // Add ping details if present
