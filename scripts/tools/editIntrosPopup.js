@@ -310,10 +310,25 @@ export class EditIntrosPopup {
             this.init().then(() => {
                 if (this.popupElement) {
                     this.popupElement.style.display = 'block';
+                    this._syncCustomSelectionState();
                 }
             });
         } else if (this.popupElement) {
             this.popupElement.style.display = 'block';
+            this._syncCustomSelectionState();
+        }
+    }
+
+    /**
+     * If the custom textarea already has content, auto-enable custom selection
+     * so the user doesn't have to re-interact with it.
+     */
+    _syncCustomSelectionState() {
+        const customCommandTextarea = this.popupElement?.querySelector('#gg-custom-edit-command');
+        const customOption = this.popupElement?.querySelector('.gg-custom-option');
+        if (customCommandTextarea && customCommandTextarea.value.trim() !== '') {
+            this.isCustomSelected = true;
+            customOption?.classList.add('selected');
         }
     }
 

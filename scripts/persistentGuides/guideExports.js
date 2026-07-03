@@ -119,6 +119,7 @@ const defaultSettings = {
     showSimpleSendButton: false,
     showRecoverInputButton: false,
     showEditIntrosButton: false,
+    showEditDescriptionButton: false,
     showCorrectionsButton: false,
     showSpellcheckerButton: false,
     showClearInputButton: false,
@@ -155,6 +156,7 @@ import { updateCharacter } from './updateCharacter.js';
 import { corrections } from '../tools/corrections.js';
 import { spellchecker } from '../tools/spellchecker.js';
 import editIntros from '../tools/editIntros.js';
+import editDescription from '../tools/editDescription.js';
 import clearInput from '../tools/clearInput.js';
 import separatedThinking from '../tools/separatedThinking.js';
 
@@ -228,6 +230,7 @@ export {
     clearInput,
     corrections,
     editIntros,
+    editDescription,
     separatedThinking,
     spellchecker,
     

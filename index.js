@@ -191,6 +191,7 @@ export const defaultSettings = {
     showSimpleSendButton: false, // Individual tool button toggles
     showRecoverInputButton: false,
     showEditIntrosButton: false,
+    showEditDescriptionButton: false,
     showCorrectionsButton: false,
     showSeparatedThinkingButton: false,
     showSpellcheckerButton: false,
@@ -233,6 +234,9 @@ export const defaultSettings = {
     profileEditIntros: '', // Profile for Edit Intros
     presetEditIntros: '',
     profileEditIntrosApiType: '', // API type for Edit Intros profile
+    profileEditDescription: '', // Profile for Edit Description
+    presetEditDescription: '',
+    profileEditDescriptionApiType: '', // API type for Edit Description profile
     profileImpersonate1st: '', // Profile for Impersonate 1st Person
     presetImpersonate1st: '',
     profileImpersonate1stApiType: '', // API type for Impersonate 1st Person profile
@@ -386,7 +390,7 @@ function migrateProfileSettings() {
     // List of all preset keys that need corresponding profile keys
     const presetKeys = [
         'presetClothes', 'presetState', 'presetThinking', 'presetSituational', 'presetRules',
-        'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros',
+        'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros', 'presetEditDescription',
         'presetImpersonate1st', 'presetImpersonate2nd', 'presetImpersonate3rd',
         'presetCustomAuto', 'presetFun'
     ];
@@ -458,7 +462,7 @@ async function updateSettingsUI() {
             debugLog(`[${extensionName}] Profile list received:`, profileList);
             
             const profileKeys = ['profileClothes','profileState','profileThinking','profileSituational','profileRules',
-             'profileCustom','profileCorrections','profileSeparatedThinking','profileSpellchecker','profileEditIntros',
+             'profileCustom','profileCorrections','profileSeparatedThinking','profileSpellchecker','profileEditIntros','profileEditDescription',
              'profileImpersonate1st','profileImpersonate2nd','profileImpersonate3rd',
              'profileCustomAuto','profileFun','profileTrackerDetermine','profileTrackerUpdate'
             ];
@@ -494,7 +498,7 @@ async function updateSettingsUI() {
 
         // Populate preset dropdowns with correct presets for selected profiles
         ['presetClothes','presetState','presetThinking','presetSituational','presetRules',
-         'presetCustom','presetCorrections','presetSeparatedThinking','presetSpellchecker','presetEditIntros',
+         'presetCustom','presetCorrections','presetSeparatedThinking','presetSpellchecker','presetEditIntros','presetEditDescription',
          'presetImpersonate1st','presetImpersonate2nd','presetImpersonate3rd',
          'presetCustomAuto','presetFun','presetTrackerDetermine','presetTrackerUpdate'
         ].forEach(async (key) => {
@@ -649,8 +653,8 @@ function handleSettingChange(event) {
         settingValue = target.value;
         
         // Handle preset and profile dropdowns - no validation needed as values are preset IDs or profile names
-        const presetFields = ['presetClothes', 'presetState', 'presetThinking', 'presetSituational', 'presetRules', 'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros', 'presetImpersonate1st', 'presetImpersonate2nd', 'presetImpersonate3rd', 'presetCustomAuto'];
-        const profileFields = ['profileClothes', 'profileState', 'profileThinking', 'profileSituational', 'profileRules', 'profileCustom', 'profileCorrections', 'profileSeparatedThinking', 'profileSpellchecker', 'profileEditIntros', 'profileImpersonate1st', 'profileImpersonate2nd', 'profileImpersonate3rd', 'profileCustomAuto', 'profileFun', 'profileTracker'];
+        const presetFields = ['presetClothes', 'presetState', 'presetThinking', 'presetSituational', 'presetRules', 'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros', 'presetEditDescription', 'presetImpersonate1st', 'presetImpersonate2nd', 'presetImpersonate3rd', 'presetCustomAuto'];
+        const profileFields = ['profileClothes', 'profileState', 'profileThinking', 'profileSituational', 'profileRules', 'profileCustom', 'profileCorrections', 'profileSeparatedThinking', 'profileSpellchecker', 'profileEditIntros', 'profileEditDescription', 'profileImpersonate1st', 'profileImpersonate2nd', 'profileImpersonate3rd', 'profileCustomAuto', 'profileFun', 'profileTracker'];
         if (presetFields.includes(settingName) || profileFields.includes(settingName)) {
             // Values are preset IDs (numbers) or profile names, no pipe validation needed
             settingValue = settingValue.trim();
@@ -943,6 +947,19 @@ function updateExtensionButtons() {
             event.stopPropagation();
         });
 
+        // 1.5. Edit Description
+        const editDescriptionMenuItem = document.createElement('a');
+        editDescriptionMenuItem.href = '#';
+        editDescriptionMenuItem.className = 'interactable';
+        editDescriptionMenuItem.innerHTML = '<i class="fa-solid fa-address-card fa-fw"></i><span data-i18n="Edit Description">Edit Description</span>';
+        editDescriptionMenuItem.title = "Opens a popup to generate or edit the character description based on instructions.";
+        editDescriptionMenuItem.addEventListener('click', async (event) => {
+            const editDescription = await import('./scripts/tools/editDescription.js');
+            await editDescription.default();
+            ggToolsMenu.classList.remove('shown');
+            event.stopPropagation();
+        });
+
         // 2. Corrections
         const correctionsMenuItem = document.createElement('a');
         correctionsMenuItem.href = '#';
@@ -1088,6 +1105,7 @@ function updateExtensionButtons() {
 
         // Add new items after the separator
         ggToolsMenu.appendChild(editIntrosMenuItem);
+        ggToolsMenu.appendChild(editDescriptionMenuItem);
         ggToolsMenu.appendChild(correctionsMenuItem);
         ggToolsMenu.appendChild(separatedThinkingMenuItem);
         ggToolsMenu.appendChild(spellcheckerMenuItem);
@@ -1312,6 +1330,15 @@ function updateExtensionButtons() {
             await editIntros.default();
         });
         regularButtons.push(editIntrosButton);
+    }
+    
+    // Edit Description button
+    if (settings.showEditDescriptionButton) {
+        const editDescriptionButton = createActionButton('gg_edit_description_button', 'Edit Description', 'fa-solid fa-address-card', async () => {
+            const editDescription = await import('./scripts/tools/editDescription.js');
+            await editDescription.default();
+        });
+        regularButtons.push(editDescriptionButton);
     }
     
     // Corrections button

@@ -58,6 +58,10 @@
     "trackerPrompt": "[OOC: Answer me out of Character! Don't continue the RP. Update the Tracker with the Last update without any preamble. Use the follwing format for your output:]\n> Distance {{char}} has moved in meters: X",
     "trackerInjection": "[Tracker Information {{tracker}}]"
   },
+  "editDescription": {
+    "editExisting": "Revise the existing character description using ONLY the requested adjustments below.\n\nRequested adjustments:\n{{instruction}}\n\nOriginal description:\n{{currentDescription}}\n\nRules:\n- Output ONLY the revised description text.\n- Do NOT add explanations or commentary.\n- Focus on physical appearance, personality traits, and behavioral characteristics.",
+    "makeNew": "Based on the following instructions, write a character description for {{char}} that describes their physical and mental traits.\n\nInstructions:\n{{instruction}}\n\nRules:\n- Output ONLY the description text.\n- Do NOT add explanations or commentary.\n- Focus on physical appearance, personality traits, and behavioral characteristics."
+  },
   "editGuides": {
     "generatedGuideInjection": "[Take into special Consideration: {{generatedGuide}}]"
   }
