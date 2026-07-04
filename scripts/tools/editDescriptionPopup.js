@@ -265,6 +265,8 @@ export class EditDescriptionPopup {
         this.initialized = false;
         this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomDescCommand') || '';
         this.showEditResult = sessionStorage.getItem('gg_showEditDescResult') === 'true';
+        this.formatEnabled = localStorage.getItem('gg_editDescFormatEnabled') !== 'false';
+        this.genWithoutPreset = localStorage.getItem('gg_editDescGenWithoutPreset') === 'true';
         this._previousDescription = null; // Stored before gen for diff
         this._isDiffMode = false; // Currently showing diff?
     }
@@ -277,6 +279,24 @@ export class EditDescriptionPopup {
 
         // Create popup container if it doesn't exist
         if (!document.getElementById('editDescriptionPopup')) {
+            const savedFormatsStr = localStorage.getItem('gg_editDescFormats') || '[]';
+            let savedFormats = [];
+            try {
+                savedFormats = JSON.parse(savedFormatsStr);
+            } catch(e) {}
+            
+            let formatListHtml = '';
+            savedFormats.forEach(val => {
+                formatListHtml += `
+                    <div class="gg-format-item" style="display: flex; flex-direction: column; gap: 5px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; border: 1px solid #444;">
+                        <div style="display: flex; gap: 10px; align-items: flex-start;">
+                            <textarea class="gg-format-value text_pole" placeholder="Format Template (e.g. name: )" style="flex: 1; resize: vertical; min-height: 40px;">${escapeHtml(val)}</textarea>
+                            <button class="gg-button gg-button-secondary gg-remove-format-btn" style="min-width: 30px; padding: 0; height: 30px;" title="Remove Format">&times;</button>
+                        </div>
+                    </div>
+                `;
+            });
+
             const popupHtml = `
                 <div id="editDescriptionPopup" class="gg-popup">
                     <div class="gg-popup-content">
@@ -311,19 +331,31 @@ export class EditDescriptionPopup {
                             
                             <div id="gg-tab-format" class="gg-tab-content" style="display: none;">
                                 <div class="gg-popup-section gg-format-section">
-                                    <h3>Format Fields</h3>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                        <h3 style="margin: 0;">Format Fields</h3>
+                                        <div class="gg-checkbox-row" style="margin: 0;">
+                                            <input type="checkbox" id="gg-enable-format-checkbox" ${this.formatEnabled ? 'checked' : ''}>
+                                            <label for="gg-enable-format-checkbox">Enable Formats</label>
+                                        </div>
+                                    </div>
                                     <p style="font-size: 0.9em; color: #aaa; margin-bottom: 10px;">Formats are only applied when using <strong>Create New</strong> in the Normal tab. Leave empty to use default prompt.</p>
                                     <div id="gg-format-list" style="display: flex; flex-direction: column; gap: 10px;">
-                                        <!-- Dynamic fields go here -->
+                                        ${formatListHtml}
                                     </div>
                                     <button id="gg-add-format-btn" class="gg-button gg-button-secondary" style="margin-top: 10px; width: 100%; font-size: 1.2em;">+</button>
                                 </div>
                             </div>
                         </div>
                         <div class="gg-popup-footer-wrap">
-                            <div class="gg-checkbox-row">
-                                <input type="checkbox" id="gg-show-edit-result-checkbox" ${this.showEditResult ? 'checked' : ''}>
-                                <label for="gg-show-edit-result-checkbox">Show edit result after gen</label>
+                            <div style="display: flex; gap: 15px; margin-bottom: 10px;">
+                                <div class="gg-checkbox-row" style="margin: 0;">
+                                    <input type="checkbox" id="gg-show-edit-result-checkbox" ${this.showEditResult ? 'checked' : ''}>
+                                    <label for="gg-show-edit-result-checkbox">Show edit result after gen</label>
+                                </div>
+                                <div class="gg-checkbox-row" style="margin: 0;">
+                                    <input type="checkbox" id="gg-gen-without-preset-checkbox" ${this.genWithoutPreset ? 'checked' : ''}>
+                                    <label for="gg-gen-without-preset-checkbox">Gen without preset</label>
+                                </div>
                             </div>
                             <div class="gg-popup-footer">
                                 <button id="ggCancelEditDescription" class="gg-button gg-button-secondary">Cancel</button>
@@ -373,10 +405,17 @@ export class EditDescriptionPopup {
         createWorldButton.addEventListener('click', () => this.generateDescription('createWorld'));
         editExistingButton.addEventListener('click', () => this.generateDescription('editExisting'));
 
+        const genWithoutPresetCheckbox = this.popupElement.querySelector('#gg-gen-without-preset-checkbox');
+
         // Checkbox state persistence
         showEditResultCheckbox.addEventListener('change', (e) => {
             this.showEditResult = e.target.checked;
             sessionStorage.setItem('gg_showEditDescResult', String(this.showEditResult));
+        });
+
+        genWithoutPresetCheckbox?.addEventListener('change', (e) => {
+            this.genWithoutPreset = e.target.checked;
+            localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
         });
 
         // Tabs
@@ -413,7 +452,13 @@ export class EditDescriptionPopup {
         // Format Fields
         const addFormatBtn = this.popupElement.querySelector('#gg-add-format-btn');
         const formatList = this.popupElement.querySelector('#gg-format-list');
-        
+        const enableFormatCheckbox = this.popupElement.querySelector('#gg-enable-format-checkbox');
+
+        enableFormatCheckbox?.addEventListener('change', (e) => {
+            this.formatEnabled = e.target.checked;
+            localStorage.setItem('gg_editDescFormatEnabled', String(this.formatEnabled));
+        });
+
         addFormatBtn.addEventListener('click', () => {
             const formatItem = document.createElement('div');
             formatItem.className = 'gg-format-item';
@@ -432,8 +477,31 @@ export class EditDescriptionPopup {
         formatList.addEventListener('click', (e) => {
             if (e.target.classList.contains('gg-remove-format-btn')) {
                 e.target.closest('.gg-format-item').remove();
+                this._saveFormats();
             }
         });
+
+        formatList.addEventListener('input', (e) => {
+            if (e.target.classList.contains('gg-format-value')) {
+                this._saveFormats();
+            }
+        });
+    }
+
+    /**
+     * Save current format fields to local storage
+     */
+    _saveFormats() {
+        if (!this.popupElement) return;
+        const formatItemElements = this.popupElement.querySelectorAll('.gg-format-item');
+        let formatListArray = [];
+        formatItemElements.forEach(item => {
+            const value = item.querySelector('.gg-format-value').value.trim();
+            if (value) {
+                formatListArray.push(value);
+            }
+        });
+        localStorage.setItem('gg_editDescFormats', JSON.stringify(formatListArray));
     }
 
     /**
@@ -580,15 +648,18 @@ export class EditDescriptionPopup {
         }
 
         // Get format list values
-        const formatItemElements = this.popupElement.querySelectorAll('.gg-format-item');
-        let formatListArray = [];
-        formatItemElements.forEach(item => {
-            const value = item.querySelector('.gg-format-value').value.trim();
-            if (value) {
-                formatListArray.push(value);
-            }
-        });
-        const formatList = formatListArray.join('\n\n');
+        let formatList = '';
+        if (this.formatEnabled) {
+            const formatItemElements = this.popupElement.querySelectorAll('.gg-format-item');
+            let formatListArray = [];
+            formatItemElements.forEach(item => {
+                const value = item.querySelector('.gg-format-value').value.trim();
+                if (value) {
+                    formatListArray.push(value);
+                }
+            });
+            formatList = formatListArray.join('\n\n');
+        }
 
         const presetValue = extension_settings[extensionName]?.presetEditDescription ?? '';
         const profileValue = extension_settings[extensionName]?.profileEditDescription ?? '';
@@ -636,55 +707,71 @@ export class EditDescriptionPopup {
 
             let generatedDescription = '';
 
-            try {
-                debugLog('[EditDescription] Requesting completion for description generation (includeChatHistory=false)...');
-                generatedDescription = await requestCompletion({
-                    profileName: profileValue,
-                    presetName: presetValue,
-                    prompt: promptForModel,
-                    debugLabel: 'editDescription:generate',
-                    includeChatHistory: false,
-                    includeIdentityContext: true,
-                });
-            } catch (error) {
-                console.warn('[GuidedGenerations] Error executing direct description generation, falling back...', error);
-            }
-
-            if (!generatedDescription || generatedDescription.trim() === '') {
-                debugLog('[EditDescription] Direct generation failed or returned empty. Falling back to /gen with chat isolation...');
-                const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
-                const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
-                setTemporaryInjection(context, 'editDescInstruct', promptForModel, { role });
-
-                const originalChat = [...(context.chat || [])];
-                if (context.chat) {
-                    context.chat.length = 0;
-                    // Add dummy system message to prevent greeting generation
-                    context.chat.push({
-                        name: 'System',
-                        is_user: false,
-                        is_system: true,
-                        send_date: Date.now(),
-                        mes: 'Generating description...',
-                        extra: { type: 'temp_desc_gen' }
-                    });
-                }
-
+            if (this.genWithoutPreset) {
                 try {
-                    const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
+                    debugLog('[EditDescription] Generating without preset using /genraw...');
+                    // Use {{newline}} macro so ST's parser replaces it with real newlines 
+                    // after splitting commands, preventing parser breakage.
+                    const escapedPrompt = promptForModel.replace(/\r?\n/g, '{{newline}}');
+                    const genResult = await context.executeSlashCommandsWithOptions(`/genraw quiet=true ${escapedPrompt} |`, {
                         showOutput: false,
                         handleExecutionErrors: true,
                     });
                     generatedDescription = genResult?.pipe || '';
-                } catch (fallbackError) {
-                    console.error('[GuidedGenerations] Fallback generation also failed:', fallbackError);
-                } finally {
-                    flushTemporaryInjection(context, 'editDescInstruct');
+                } catch (error) {
+                    console.error('[GuidedGenerations] /genraw generation failed:', error);
+                }
+            } else {
+                try {
+                    debugLog('[EditDescription] Requesting completion for description generation (includeChatHistory=false)...');
+                    generatedDescription = await requestCompletion({
+                        profileName: profileValue,
+                        presetName: presetValue,
+                        prompt: promptForModel,
+                        debugLabel: 'editDescription:generate',
+                        includeChatHistory: false,
+                        includeIdentityContext: true,
+                    });
+                } catch (error) {
+                    console.warn('[GuidedGenerations] Error executing direct description generation, falling back...', error);
+                }
+
+                if (!generatedDescription || generatedDescription.trim() === '') {
+                    debugLog('[EditDescription] Direct generation failed or returned empty. Falling back to /gen with chat isolation...');
+                    const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
+                    const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
+                    setTemporaryInjection(context, 'editDescInstruct', promptForModel, { role });
+
+                    const originalChat = [...(context.chat || [])];
                     if (context.chat) {
                         context.chat.length = 0;
-                        context.chat.push(...originalChat);
-                        if (typeof context.saveChat === 'function') await context.saveChat();
-                        if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+                        // Add dummy system message to prevent greeting generation
+                        context.chat.push({
+                            name: 'System',
+                            is_user: false,
+                            is_system: true,
+                            send_date: Date.now(),
+                            mes: 'Generating description...',
+                            extra: { type: 'temp_desc_gen' }
+                        });
+                    }
+
+                    try {
+                        const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
+                            showOutput: false,
+                            handleExecutionErrors: true,
+                        });
+                        generatedDescription = genResult?.pipe || '';
+                    } catch (fallbackError) {
+                        console.error('[GuidedGenerations] Fallback generation also failed:', fallbackError);
+                    } finally {
+                        flushTemporaryInjection(context, 'editDescInstruct');
+                        if (context.chat) {
+                            context.chat.length = 0;
+                            context.chat.push(...originalChat);
+                            if (typeof context.saveChat === 'function') await context.saveChat();
+                            if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+                        }
                     }
                 }
             }
