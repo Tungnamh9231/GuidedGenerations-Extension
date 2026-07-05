@@ -16,6 +16,7 @@ import {
     activateSendButtons,
     setSendButtonState,
 } from '../persistentGuides/guideExports.js';
+import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
 
 let lastCorrectionInstruction = '';
 const TEXT_API_IDS = new Set([
@@ -171,6 +172,16 @@ class CorrectionsPopup {
             messageTextarea.addEventListener('mouseup', recordSelection);
             messageTextarea.addEventListener('keyup', recordSelection);
             messageTextarea.addEventListener('select', recordSelection);
+            // iOS/Safari: touch-based selection (long-press + drag handles) does
+            // not fire mouseup and fires `select` unreliably. `touchend` covers
+            // the moment the finger lifts after making/extending a selection.
+            messageTextarea.addEventListener('touchend', () => {
+                setTimeout(recordSelection, 50);
+            }, { passive: true });
+            // The reliable cross-platform signal for textarea selection changes is
+            // `selectionchange` on `document` (it does not bubble to the textarea).
+            // This is what actually fires on iPhone while dragging selection handles.
+            this._bindDocumentSelectionChange(messageTextarea);
             // While focused, the native (yellow-tinted) selection is authoritative —
             // hide the overlay so the two never compete.
             messageTextarea.addEventListener('focus', () => {
@@ -297,6 +308,30 @@ class CorrectionsPopup {
         this.hideOverlay();
         const overlay = this.popupElement?.querySelector('#ggCorrectionsMessageOverlay');
         if (overlay) overlay.innerHTML = '';
+    }
+
+    /**
+     * Listen for `selectionchange` on `document`. This event does not bubble
+     * and only fires on the document, but it is the only reliable signal that
+     * the selection inside a textarea changed on iOS/Safari (where `mouseup`
+     * and `select` are unreliable for touch-driven selection-handle drags).
+     */
+    _bindDocumentSelectionChange(textarea) {
+        if (!textarea) return;
+        // Guard against duplicate bindings across re-init.
+        if (this._documentSelectionChangeBound) return;
+        this._documentSelectionChangeBound = true;
+
+        const handler = () => {
+            // Only react when the change involves our message textarea.
+            const active = document.activeElement;
+            if (active !== textarea) return;
+            // selectionchange fires very frequently during a drag; read the
+            // indices directly so recordSelection stays the single source of
+            // truth for what counts as a valid recorded range.
+            this.recordSelection(textarea);
+        };
+        document.addEventListener('selectionchange', handler);
     }
 
     recordSelection(textarea) {
@@ -485,12 +520,18 @@ class CorrectionsPopup {
 
             try {
                 if (useDirectCall) {
+                    // Corrections embeds its own chat history directly into the
+                    // prompt template (via {{historyBlock}}), so we pass
+                    // includeChatHistory: false here to avoid duplicating it
+                    // through the prompt manager. Identity context (char/user
+                    // descriptions, scenario, world info) is still attached.
                     correctedText = await requestCompletion({
                         profileName: profileValue,
                         presetName: targetPreset,
                         prompt: promptForModel,
                         debugLabel: 'corrections',
-                        includeChatHistory: this.includeChatHistory,
+                        includeChatHistory: false,
+                        includeIdentityContext: true,
                     });
                 } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
                     const command = this.includeChatHistory ? '/gen' : '/genraw';
@@ -548,40 +589,10 @@ export default async function corrections() {
  * @param {string} stscript - The ST-Script command to execute
  */
 async function applyCorrectionSwipe(context, messageIndex, correctedText) {
-    const messageData = context.chat[messageIndex];
-    if (!messageData) {
-        console.error('[GuidedGenerations][Corrections] Could not find selected message to update.');
-        return;
-    }
-
-    if (!Array.isArray(messageData.swipes)) {
-        messageData.swipes = [messageData.mes];
-    }
-
-    messageData.swipes.push(correctedText);
-    messageData.swipe_id = messageData.swipes.length - 1;
-    messageData.mes = correctedText;
-
-    const mesDom = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
-    if (mesDom && typeof context.messageFormatting === 'function') {
-        const mesTextElement = mesDom.querySelector('.mes_text');
-        if (mesTextElement) {
-            mesTextElement.innerHTML = context.messageFormatting(
-                messageData.mes,
-                messageData.name,
-                messageData.is_system,
-                messageData.is_user,
-                messageIndex
-            );
-        }
-        [...mesDom.querySelectorAll('.swipes-counter')].forEach((it) => {
-            it.textContent = `${messageData.swipe_id + 1}/${messageData.swipes.length}`;
-        });
-    }
-
-    if (context.eventSource && context.event_types) {
-        context.eventSource.emit(context.event_types.MESSAGE_SWIPED, messageIndex);
-    }
+    await appendSwipeToMessage(context, messageIndex, correctedText, {
+        source: 'manual',
+        model: 'Guided Generations',
+    });
 
     // Refresh swipe UI (chevrons) so the user can navigate between the
     // original and the new correction swipe. Without this, the back-chevron
@@ -592,10 +603,6 @@ async function applyCorrectionSwipe(context, messageIndex, correctedText) {
         }
     } catch (refreshError) {
         debugLog('[GuidedGenerations][Corrections] Could not refresh swipe buttons:', refreshError);
-    }
-
-    if (typeof context.saveChat === 'function') {
-        await context.saveChat();
     }
 }
 
