@@ -358,10 +358,9 @@ export class EditDescriptionPopup {
                                 </div>
                             </div>
                             <div class="gg-popup-footer">
-                                <button id="ggCancelEditDescription" class="gg-button gg-button-secondary">Cancel</button>
-                                <button id="ggCreateWorldDescription" class="gg-button gg-button-secondary">Create World</button>
                                 <button id="ggCreateNewDescription" class="gg-button gg-button-secondary">Create New</button>
                                 <button id="ggEditExistingDescription" class="gg-button gg-button-primary">Edit Existing</button>
+                                <button id="ggCreateWorldDescription" class="gg-button gg-button-secondary">Create World</button>
                             </div>
                         </div>
                     </div>
@@ -390,15 +389,13 @@ export class EditDescriptionPopup {
         if (!this.popupElement) return;
 
         const closeButton = this.popupElement.querySelector('.gg-popup-close');
-        const cancelButton = this.popupElement.querySelector('#ggCancelEditDescription');
         const createNewButton = this.popupElement.querySelector('#ggCreateNewDescription');
         const createWorldButton = this.popupElement.querySelector('#ggCreateWorldDescription');
         const editExistingButton = this.popupElement.querySelector('#ggEditExistingDescription');
         const showEditResultCheckbox = this.popupElement.querySelector('#gg-show-edit-result-checkbox');
 
-        // Close/Cancel Actions
+        // Close Action
         closeButton.addEventListener('click', () => this.close());
-        cancelButton.addEventListener('click', () => this.close());
 
         // Generate Actions
         createNewButton.addEventListener('click', () => this.generateDescription('makeNew'));
@@ -722,56 +719,40 @@ export class EditDescriptionPopup {
                     console.error('[GuidedGenerations] /genraw generation failed:', error);
                 }
             } else {
-                try {
-                    debugLog('[EditDescription] Requesting completion for description generation (includeChatHistory=false)...');
-                    generatedDescription = await requestCompletion({
-                        profileName: profileValue,
-                        presetName: presetValue,
-                        prompt: promptForModel,
-                        debugLabel: 'editDescription:generate',
-                        includeChatHistory: false,
-                        includeIdentityContext: true,
+                debugLog('[EditDescription] Using /gen with chat isolation...');
+                const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
+                const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
+                setTemporaryInjection(context, 'editDescInstruct', promptForModel, { role });
+
+                const originalChat = [...(context.chat || [])];
+                if (context.chat) {
+                    context.chat.length = 0;
+                    // Add dummy system message to prevent greeting generation
+                    context.chat.push({
+                        name: 'System',
+                        is_user: false,
+                        is_system: true,
+                        send_date: Date.now(),
+                        mes: 'Generating description...',
+                        extra: { type: 'temp_desc_gen' }
                     });
-                } catch (error) {
-                    console.warn('[GuidedGenerations] Error executing direct description generation, falling back...', error);
                 }
 
-                if (!generatedDescription || generatedDescription.trim() === '') {
-                    debugLog('[EditDescription] Direct generation failed or returned empty. Falling back to /gen with chat isolation...');
-                    const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
-                    const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
-                    setTemporaryInjection(context, 'editDescInstruct', promptForModel, { role });
-
-                    const originalChat = [...(context.chat || [])];
+                try {
+                    const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
+                        showOutput: false,
+                        handleExecutionErrors: true,
+                    });
+                    generatedDescription = genResult?.pipe || '';
+                } catch (fallbackError) {
+                    console.error('[GuidedGenerations] Fallback generation also failed:', fallbackError);
+                } finally {
+                    flushTemporaryInjection(context, 'editDescInstruct');
                     if (context.chat) {
                         context.chat.length = 0;
-                        // Add dummy system message to prevent greeting generation
-                        context.chat.push({
-                            name: 'System',
-                            is_user: false,
-                            is_system: true,
-                            send_date: Date.now(),
-                            mes: 'Generating description...',
-                            extra: { type: 'temp_desc_gen' }
-                        });
-                    }
-
-                    try {
-                        const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
-                            showOutput: false,
-                            handleExecutionErrors: true,
-                        });
-                        generatedDescription = genResult?.pipe || '';
-                    } catch (fallbackError) {
-                        console.error('[GuidedGenerations] Fallback generation also failed:', fallbackError);
-                    } finally {
-                        flushTemporaryInjection(context, 'editDescInstruct');
-                        if (context.chat) {
-                            context.chat.length = 0;
-                            context.chat.push(...originalChat);
-                            if (typeof context.saveChat === 'function') await context.saveChat();
-                            if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-                        }
+                        context.chat.push(...originalChat);
+                        if (typeof context.saveChat === 'function') await context.saveChat();
+                        if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
                     }
                 }
             }
