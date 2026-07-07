@@ -264,7 +264,7 @@ export class EditDescriptionPopup {
         this.popupElement = null;
         this.initialized = false;
         this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomDescCommand') || '';
-        this.showEditResult = sessionStorage.getItem('gg_showEditDescResult') === 'true';
+        this.showEditResult = localStorage.getItem('gg_showEditDescResult') === 'true';
         this.formatEnabled = localStorage.getItem('gg_editDescFormatEnabled') !== 'false';
         this.genWithoutPreset = localStorage.getItem('gg_editDescGenWithoutPreset') === 'true';
         this._previousDescription = null; // Stored before gen for diff
@@ -407,7 +407,7 @@ export class EditDescriptionPopup {
         // Checkbox state persistence
         showEditResultCheckbox.addEventListener('change', (e) => {
             this.showEditResult = e.target.checked;
-            sessionStorage.setItem('gg_showEditDescResult', String(this.showEditResult));
+            localStorage.setItem('gg_showEditDescResult', String(this.showEditResult));
         });
 
         genWithoutPresetCheckbox?.addEventListener('change', (e) => {
