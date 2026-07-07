@@ -243,14 +243,14 @@ const GUIDEBOOK_HTML = `
             <li><code>@{shy personality} @{wears glasses} Make a new energetic character</code> → New description will keep "shy personality" and "wears glasses" details.</li>
         </ul>
 
-        <h4>🔹 Show Edit Result After Gen</h4>
-        <p>When this checkbox is ticked and you press <strong>Edit Existing</strong>:</p>
+        <h4>🔹 Previewing Edits</h4>
+        <p>When you use <strong>Edit Existing</strong>, the result is not saved immediately. Instead:</p>
         <ul>
             <li>After generation completes, the modal reopens automatically.</li>
-            <li>The "Current Description" section shows a <strong>diff view</strong> comparing the old and new description.</li>
+            <li>You will see a <strong>diff view</strong> comparing the old and new description.</li>
             <li><span style="color:#3fb950;">Green lines (+)</span> = newly added content.</li>
             <li><span style="color:#f85149;">Red lines (−)</span> = removed content.</li>
-            <li>Close the modal to dismiss the diff. Next open shows the description normally.</li>
+            <li>Click <strong>Apply</strong> to save the changes, or <strong>Revert</strong> to discard them.</li>
         </ul>
         <p><em>Note: This does NOT trigger for "Create New" — only for "Edit Existing".</em></p>
     </div>
@@ -264,11 +264,12 @@ export class EditDescriptionPopup {
         this.popupElement = null;
         this.initialized = false;
         this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomDescCommand') || '';
-        this.showEditResult = localStorage.getItem('gg_showEditDescResult') === 'true';
         this.formatEnabled = localStorage.getItem('gg_editDescFormatEnabled') !== 'false';
         this.genWithoutPreset = localStorage.getItem('gg_editDescGenWithoutPreset') === 'true';
         this._previousDescription = null; // Stored before gen for diff
+        this._pendingGeneratedDescription = null; // Stored for Apply button
         this._isDiffMode = false; // Currently showing diff?
+        this._isPreviewMode = false; // Currently in preview mode?
     }
 
     /**
@@ -347,17 +348,15 @@ export class EditDescriptionPopup {
                             </div>
                         </div>
                         <div class="gg-popup-footer-wrap">
-                            <div style="display: flex; gap: 15px; margin-bottom: 10px;">
-                                <div class="gg-checkbox-row" style="margin: 0;">
-                                    <input type="checkbox" id="gg-show-edit-result-checkbox" ${this.showEditResult ? 'checked' : ''}>
-                                    <label for="gg-show-edit-result-checkbox">Show edit result after gen</label>
-                                </div>
+                            <div style="display: flex; gap: 15px; margin-bottom: 10px;" id="gg-checkboxes-container">
                                 <div class="gg-checkbox-row" style="margin: 0;">
                                     <input type="checkbox" id="gg-gen-without-preset-checkbox" ${this.genWithoutPreset ? 'checked' : ''}>
                                     <label for="gg-gen-without-preset-checkbox">Gen without preset</label>
                                 </div>
                             </div>
                             <div class="gg-popup-footer">
+                                <button id="ggRevertEdit" class="gg-button gg-button-secondary" style="display: none;">Revert</button>
+                                <button id="ggApplyEdit" class="gg-button gg-button-primary" style="display: none;">Apply</button>
                                 <button id="ggCreateNewDescription" class="gg-button gg-button-secondary">Create New</button>
                                 <button id="ggEditExistingDescription" class="gg-button gg-button-primary">Edit Existing</button>
                                 <button id="ggCreateWorldDescription" class="gg-button gg-button-secondary">Create World</button>
@@ -392,8 +391,6 @@ export class EditDescriptionPopup {
         const createNewButton = this.popupElement.querySelector('#ggCreateNewDescription');
         const createWorldButton = this.popupElement.querySelector('#ggCreateWorldDescription');
         const editExistingButton = this.popupElement.querySelector('#ggEditExistingDescription');
-        const showEditResultCheckbox = this.popupElement.querySelector('#gg-show-edit-result-checkbox');
-
         // Close Action
         closeButton.addEventListener('click', () => this.close());
 
@@ -402,14 +399,32 @@ export class EditDescriptionPopup {
         createWorldButton.addEventListener('click', () => this.generateDescription('createWorld'));
         editExistingButton.addEventListener('click', () => this.generateDescription('editExisting'));
 
+        // Preview Actions
+        const revertBtn = this.popupElement.querySelector('#ggRevertEdit');
+        const applyBtn = this.popupElement.querySelector('#ggApplyEdit');
+
+        revertBtn?.addEventListener('click', () => {
+            this._clearDiffState();
+            this._refreshDescriptionDisplay();
+        });
+
+        applyBtn?.addEventListener('click', () => {
+            if (this._pendingGeneratedDescription) {
+                const descriptionTextarea = document.getElementById('description_textarea');
+                if (descriptionTextarea) {
+                    descriptionTextarea.value = this._pendingGeneratedDescription;
+                    const inputEvent = new Event('input', { bubbles: true });
+                    descriptionTextarea.dispatchEvent(inputEvent);
+                    descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+            this._clearDiffState();
+            this.close();
+        });
+
         const genWithoutPresetCheckbox = this.popupElement.querySelector('#gg-gen-without-preset-checkbox');
 
         // Checkbox state persistence
-        showEditResultCheckbox.addEventListener('change', (e) => {
-            this.showEditResult = e.target.checked;
-            localStorage.setItem('gg_showEditDescResult', String(this.showEditResult));
-        });
-
         genWithoutPresetCheckbox?.addEventListener('change', (e) => {
             this.genWithoutPreset = e.target.checked;
             localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
@@ -552,7 +567,9 @@ export class EditDescriptionPopup {
      */
     _clearDiffState() {
         this._previousDescription = null;
+        this._pendingGeneratedDescription = null;
         this._isDiffMode = false;
+        this._isPreviewMode = false;
 
         // Restore heading
         const heading = this.popupElement?.querySelector('.gg-current-desc-section h3');
@@ -561,6 +578,82 @@ export class EditDescriptionPopup {
         // Remove diff-view class
         const displayEl = this.popupElement?.querySelector('#gg-current-desc-display');
         if (displayEl) displayEl.classList.remove('gg-diff-view');
+
+        // Restore UI elements if popup is open
+        if (this.popupElement) {
+            const tabs = this.popupElement.querySelector('.gg-tabs');
+            if (tabs) tabs.style.display = 'flex';
+            
+            const customCmd = this.popupElement.querySelector('.gg-custom-command-section');
+            if (customCmd) customCmd.style.display = '';
+            
+            const checkboxes = this.popupElement.querySelector('#gg-checkboxes-container');
+            if (checkboxes) checkboxes.style.display = 'flex';
+            
+            const guidebook = this.popupElement.querySelector('.gg-guidebook');
+            if (guidebook) guidebook.style.display = '';
+            
+            const btnCreate = this.popupElement.querySelector('#ggCreateNewDescription');
+            if (btnCreate) btnCreate.style.display = '';
+            
+            const btnEdit = this.popupElement.querySelector('#ggEditExistingDescription');
+            if (btnEdit) btnEdit.style.display = '';
+            
+            const btnWorld = this.popupElement.querySelector('#ggCreateWorldDescription');
+            if (btnWorld) btnWorld.style.display = '';
+            
+            const btnRevert = this.popupElement.querySelector('#ggRevertEdit');
+            if (btnRevert) btnRevert.style.display = 'none';
+            
+            const btnApply = this.popupElement.querySelector('#ggApplyEdit');
+            if (btnApply) btnApply.style.display = 'none';
+        }
+    }
+
+    /**
+     * Enter preview mode
+     */
+    _enterPreviewMode(oldDesc, newDesc) {
+        this._isPreviewMode = true;
+        this._pendingGeneratedDescription = newDesc;
+        this._previousDescription = oldDesc;
+
+        if (!this.initialized) {
+            return;
+        }
+        
+        if (this.popupElement) {
+            this.popupElement.style.display = 'block';
+            this._showDiffView(oldDesc, newDesc);
+            
+            // Hide other elements
+            const tabs = this.popupElement.querySelector('.gg-tabs');
+            if (tabs) tabs.style.display = 'none';
+            
+            const customCmd = this.popupElement.querySelector('.gg-custom-command-section');
+            if (customCmd) customCmd.style.display = 'none';
+            
+            const checkboxes = this.popupElement.querySelector('#gg-checkboxes-container');
+            if (checkboxes) checkboxes.style.display = 'none';
+            
+            const guidebook = this.popupElement.querySelector('.gg-guidebook');
+            if (guidebook) guidebook.style.display = 'none';
+            
+            const btnCreate = this.popupElement.querySelector('#ggCreateNewDescription');
+            if (btnCreate) btnCreate.style.display = 'none';
+            
+            const btnEdit = this.popupElement.querySelector('#ggEditExistingDescription');
+            if (btnEdit) btnEdit.style.display = 'none';
+            
+            const btnWorld = this.popupElement.querySelector('#ggCreateWorldDescription');
+            if (btnWorld) btnWorld.style.display = 'none';
+            
+            const btnRevert = this.popupElement.querySelector('#ggRevertEdit');
+            if (btnRevert) btnRevert.style.display = '';
+            
+            const btnApply = this.popupElement.querySelector('#ggApplyEdit');
+            if (btnApply) btnApply.style.display = '';
+        }
     }
 
     /**
@@ -580,22 +673,7 @@ export class EditDescriptionPopup {
         }
     }
 
-    /**
-     * Open the popup in diff mode (after generation)
-     */
-    _openWithDiff(oldDesc, newDesc) {
-        if (!this.initialized) {
-            this.init().then(() => {
-                if (this.popupElement) {
-                    this.popupElement.style.display = 'block';
-                    this._showDiffView(oldDesc, newDesc);
-                }
-            });
-        } else if (this.popupElement) {
-            this.popupElement.style.display = 'block';
-            this._showDiffView(oldDesc, newDesc);
-        }
-    }
+
 
     /**
      * Close the popup
@@ -628,18 +706,19 @@ export class EditDescriptionPopup {
         const { cleanInstruction, pings } = extractPings(instruction);
         const hasPings = pings.length > 0;
 
-        // Save previous description BEFORE closing (for diff view later)
-        const shouldShowResult = this.showEditResult && mode === 'editExisting';
+        // Save previous description BEFORE closing
         const descriptionTextarea = document.getElementById('description_textarea');
         const currentDescription = descriptionTextarea ? descriptionTextarea.value.trim() : '';
         
-        if (shouldShowResult) {
+        const isEditExisting = mode === 'editExisting';
+        if (isEditExisting) {
             this._previousDescription = currentDescription;
         }
 
         // Close the popup immediately now that validation has passed
         // (Clear diff state so it doesn't interfere)
         this._isDiffMode = false;
+        this._isPreviewMode = false;
         if (this.popupElement) {
             this.popupElement.style.display = 'none';
         }
@@ -770,24 +849,24 @@ export class EditDescriptionPopup {
                 return;
             }
 
-            // Put the result in the textarea
-            if (descriptionTextarea) {
-                descriptionTextarea.value = generatedDescription;
-                
-                // dispatch input event to ensure ST registers the change
-                const inputEvent = new Event('input', { bubbles: true });
-                descriptionTextarea.dispatchEvent(inputEvent);
-                descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                debugLog('[EditDescription] Description updated successfully.');
-            } else {
-                console.error('[GuidedGenerations] #description_textarea not found in DOM.');
-            }
-
-            // ── Show diff result if checkbox was ticked + Edit Existing mode ──
-            if (shouldShowResult && this._previousDescription !== null) {
+            if (isEditExisting && this._previousDescription !== null) {
+                // Enter preview mode and DO NOT save to textarea yet
                 const newDescription = generatedDescription.trim();
-                this._openWithDiff(this._previousDescription, newDescription);
+                this._enterPreviewMode(this._previousDescription, newDescription);
+            } else {
+                // Put the result in the textarea immediately
+                if (descriptionTextarea) {
+                    descriptionTextarea.value = generatedDescription;
+                    
+                    // dispatch input event to ensure ST registers the change
+                    const inputEvent = new Event('input', { bubbles: true });
+                    descriptionTextarea.dispatchEvent(inputEvent);
+                    descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    debugLog('[EditDescription] Description updated successfully.');
+                } else {
+                    console.error('[GuidedGenerations] #description_textarea not found in DOM.');
+                }
             }
 
         } catch (error) {
