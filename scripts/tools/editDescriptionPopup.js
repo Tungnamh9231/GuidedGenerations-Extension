@@ -19,7 +19,17 @@ import {
     activateSendButtons,
     deactivateSendButtons,
     setSendButtonState,
+    buildChatMessagesWithPromptManager
 } from '../persistentGuides/guideExports.js'; // Import from central hub
+
+import {
+    loadBlocks,
+    renderPromptBlocksUI,
+    assembleMessages,
+    getDefaultEditDescriptionBlocks,
+    EDIT_DESC_VARIABLES_HTML,
+    EDIT_DESCRIPTION_MODES
+} from '../utils/dynamicPromptManager.js';
 
 const SCRIPT_PROMPT_KEY = 'script_inject_';
 const INJECT_POSITIONS = { chat: 1 };
@@ -217,19 +227,6 @@ const GUIDEBOOK_HTML = `
 <details class="gg-guidebook">
     <summary>📖 Guidebook — How to use Edit Description</summary>
     <div class="gg-guidebook-content">
-        <h4>🔹 Create New vs Edit Existing</h4>
-        <ul>
-            <li><strong>Create New</strong> — Generates an entirely new description from scratch based on your instruction. The current description is ignored.</li>
-            <li><strong>Edit Existing</strong> — Modifies the current description. The AI receives both your instruction and the existing description, and applies targeted changes.</li>
-        </ul>
-
-        <h4>🔹 Custom Instruction</h4>
-        <p>Write what you want in the textarea. Be specific about what to change or create. Examples:</p>
-        <ul>
-            <li><code>Make her hair color blue instead of red</code></li>
-            <li><code>Add a scar on the left cheek</code></li>
-            <li><code>Rewrite the personality to be more cheerful</code></li>
-        </ul>
 
         <h4>🔹 Ping Syntax — <code>@{...}</code></h4>
         <p>Use <code>@{detail}</code> to "pin" a specific part of the description for special handling:</p>
@@ -270,6 +267,8 @@ export class EditDescriptionPopup {
         this._pendingGeneratedDescription = null; // Stored for Apply button
         this._isDiffMode = false; // Currently showing diff?
         this._isPreviewMode = false; // Currently in preview mode?
+        this.currentPromptMode = 'editDescription.editExisting';
+        this.promptsMap = {};
     }
 
     /**
@@ -277,6 +276,20 @@ export class EditDescriptionPopup {
      */
     async init() {
         if (this.initialized) return;
+
+        for (const modeKey of Object.keys(EDIT_DESCRIPTION_MODES)) {
+            const settingKey = `editDescCustomPrompts_${modeKey}`;
+            this.promptsMap[modeKey] = loadBlocks(settingKey, getDefaultEditDescriptionBlocks(modeKey));
+        }
+        
+        // Migrate old setting if present and the new one isn't
+        if (localStorage.getItem('gg_editDescCustomPrompts') && !localStorage.getItem('gg_editDescCustomPrompts_editDescription.editExisting')) {
+            const oldBlocks = loadBlocks('editDescCustomPrompts', null);
+            if (oldBlocks && oldBlocks.length > 0) {
+                this.promptsMap['editDescription.editExisting'] = oldBlocks;
+                // Try saving it under new key (dynamicPromptManager needs settingKey but we can just let it save on first edit)
+            }
+        }
 
         // Create popup container if it doesn't exist
         if (!document.getElementById('editDescriptionPopup')) {
@@ -312,6 +325,7 @@ export class EditDescriptionPopup {
                             <div class="gg-tabs" style="display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;">
                                 <button class="gg-tab-btn active" data-tab="normal" style="background: none; border: none; color: white; cursor: pointer; padding: 5px 10px; border-radius: 4px; font-weight: bold;">Normal</button>
                                 <button class="gg-tab-btn" data-tab="format" style="background: none; border: none; color: #ccc; cursor: pointer; padding: 5px 10px; border-radius: 4px;">Format</button>
+                                <button class="gg-tab-btn" data-tab="prompts" style="background: none; border: none; color: #ccc; cursor: pointer; padding: 5px 10px; border-radius: 4px;">Prompts</button>
                             </div>
 
                             <div id="gg-tab-normal" class="gg-tab-content active" style="display: block;">
@@ -346,6 +360,31 @@ export class EditDescriptionPopup {
                                     <button id="gg-add-format-btn" class="gg-button gg-button-secondary" style="margin-top: 10px; width: 100%; font-size: 1.2em;">+</button>
                                 </div>
                             </div>
+                            
+                            <div id="gg-tab-prompts" class="gg-tab-content" style="display: none;">
+                                <div class="gg-popup-section gg-prompts-section">
+                                    <div class="gg-prompt-mode-selector-wrap" style="margin-bottom: 10px;">
+                                        <label for="gg-prompt-mode-select" style="margin-right: 5px;">Edit Prompts for:</label>
+                                        <select id="gg-prompt-mode-select" class="text_pole">
+                                            <optgroup label="── Edit Description ──">
+                                                <option value="editDescription.editExisting">Edit Description (Existing)</option>
+                                                <option value="editDescription.editExistingWithPing">Edit Description (Targeted)</option>
+                                            </optgroup>
+                                            <optgroup label="── Create New Description ──">
+                                                <option value="editDescription.makeNew">Create New Desc — no format</option>
+                                                <option value="editDescription.makeNew.format">Create New Desc — have format</option>
+                                                <option value="editDescription.makeNewWithPing">Create New Desc Targeted — no format</option>
+                                                <option value="editDescription.makeNewWithPing.format">Create New Desc Targeted — have format</option>
+                                            </optgroup>
+                                            <optgroup label="── Create World Info ──">
+                                                <option value="editDescription.createWorld">Create World Info</option>
+                                                <option value="editDescription.createWorldWithPing">Create World Info (Targeted)</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+                                    <div id="gg-desc-prompts-container"></div>
+                                </div>
+                            </div>
                         </div>
                         <div class="gg-popup-footer-wrap">
                             <div style="display: flex; gap: 15px; margin-bottom: 10px;" id="gg-checkboxes-container">
@@ -370,6 +409,40 @@ export class EditDescriptionPopup {
             const popupContainer = document.createElement('div');
             popupContainer.innerHTML = popupHtml;
             document.body.appendChild(popupContainer.firstElementChild);
+            
+            const renderBlocks = () => {
+                const promptsContainer = document.getElementById('gg-desc-prompts-container');
+                if (promptsContainer) {
+                    const currentBlocks = this.promptsMap[this.currentPromptMode] || [];
+                    renderPromptBlocksUI(promptsContainer, currentBlocks, {
+                        settingKey: `editDescCustomPrompts_${this.currentPromptMode}`,
+                        getDefaults: () => getDefaultEditDescriptionBlocks(this.currentPromptMode),
+                        variableGuideHtml: EDIT_DESC_VARIABLES_HTML,
+                        onResetAll: () => {
+                            for (const modeKey of Object.keys(EDIT_DESCRIPTION_MODES)) {
+                                this.promptsMap[modeKey] = getDefaultEditDescriptionBlocks(modeKey);
+                                localStorage.setItem(`gg_editDescCustomPrompts_${modeKey}`, JSON.stringify(this.promptsMap[modeKey]));
+                            }
+                            return this.promptsMap[this.currentPromptMode];
+                        },
+                        onBlocksChanged: (blocks) => { 
+                            this.promptsMap[this.currentPromptMode] = blocks; 
+                            const pb = blocks.find(b => b.type === 'preset');
+                            if (pb && this.genWithoutPreset !== !pb.enabled) {
+                                this.genWithoutPreset = !pb.enabled;
+                                localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
+                                const cb = document.getElementById('gg-gen-without-preset-checkbox');
+                                if (cb) cb.checked = this.genWithoutPreset;
+                            }
+                        }
+                    });
+                }
+            };
+            
+            this._renderBlocks = renderBlocks; // Save for external calls
+            
+            // Call once after append
+            setTimeout(renderBlocks, 10);
         }
 
         // Get the popup element reference
@@ -428,6 +501,29 @@ export class EditDescriptionPopup {
         genWithoutPresetCheckbox?.addEventListener('change', (e) => {
             this.genWithoutPreset = e.target.checked;
             localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
+            // Sync with preset block
+            const presetBlock = this.prompts.find(b => b.type === 'preset');
+            if (presetBlock) {
+                presetBlock.enabled = !this.genWithoutPreset;
+                const promptsContainer = document.getElementById('gg-desc-prompts-container');
+                if (promptsContainer) {
+                    renderPromptBlocksUI(promptsContainer, this.prompts, {
+                        settingKey: 'editDescCustomPrompts',
+                        getDefaults: getDefaultEditDescriptionBlocks,
+                        variableGuideHtml: EDIT_DESC_VARIABLES_HTML,
+                        onBlocksChanged: (blocks) => { 
+                            this.prompts = blocks; 
+                            const pb = blocks.find(b => b.type === 'preset');
+                            if (pb && this.genWithoutPreset !== !pb.enabled) {
+                                this.genWithoutPreset = !pb.enabled;
+                                localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
+                                const cb = document.getElementById('gg-gen-without-preset-checkbox');
+                                if (cb) cb.checked = this.genWithoutPreset;
+                            }
+                        }
+                    });
+                }
+            }
         });
 
         // Tabs
@@ -456,7 +552,7 @@ export class EditDescriptionPopup {
 
                 // Toggle footer
                 if (footerWrap) {
-                    footerWrap.style.display = targetTab === 'format' ? 'none' : 'block';
+                    footerWrap.style.display = (targetTab === 'format' || targetTab === 'prompts') ? 'none' : 'block';
                 }
             });
         });
@@ -498,6 +594,17 @@ export class EditDescriptionPopup {
                 this._saveFormats();
             }
         });
+
+        // Prompt Mode Dropdown
+        const modeSelect = this.popupElement.querySelector('#gg-prompt-mode-select');
+        if (modeSelect) {
+            modeSelect.addEventListener('change', (e) => {
+                this.currentPromptMode = e.target.value;
+                if (typeof this._renderBlocks === 'function') {
+                    this._renderBlocks();
+                }
+            });
+        }
     }
 
     /**
@@ -747,17 +854,17 @@ export class EditDescriptionPopup {
                 return;
             }
 
-            // Choose prompt template based on mode + ping presence + format presence
+            // Choose prompt template based on mode + ping presence
             let promptKey;
             if (mode === 'editExisting') {
                 promptKey = hasPings ? 'editDescription.editExistingWithPing' : 'editDescription.editExisting';
             } else if (mode === 'createWorld') {
                 promptKey = hasPings ? 'editDescription.createWorldWithPing' : 'editDescription.createWorld';
             } else {
-                if (hasPings) {
-                    promptKey = formatList ? 'editDescription.makeNewWithPingFormat' : 'editDescription.makeNewWithPing';
-                } else {
-                    promptKey = formatList ? 'editDescription.makeNewWithFormat' : 'editDescription.makeNew';
+                promptKey = hasPings ? 'editDescription.makeNewWithPing' : 'editDescription.makeNew';
+                // Append format suffix when format is enabled and has content (only for makeNew)
+                if (this.formatEnabled && formatList) {
+                    promptKey += '.format';
                 }
             }
 
@@ -775,7 +882,34 @@ export class EditDescriptionPopup {
                 templateData.pingDetails = pings.map((p, i) => `${i + 1}. "${p}"`).join('\n');
             }
 
-            const promptForModel = fillPromptTemplate(promptTemplate, templateData);
+            // Check if user has custom blocks (not just default reset state)
+            const currentPrompts = this.promptsMap[promptKey] || [];
+            const hasCustomBlocks = currentPrompts.some(b => b.type === 'custom' && b.content.trim() !== '');
+            let useDynamicBlocks = hasCustomBlocks;
+            
+            let promptForModel = '';
+            let finalMessages = [];
+
+            if (useDynamicBlocks) {
+                // Use new dynamic blocks
+                const variableMap = {
+                    i: templateData.instruction,
+                    d: templateData.currentDescription,
+                    t: templateData.pingDetails || '',
+                    f: templateData.formatList
+                };
+                
+                let presetMessages = [];
+                if (!this.genWithoutPreset) {
+                    const presetName = extension_settings[extensionName]?.presetEditDescription || '';
+                    const markerMessages = [{ role: 'system', content: '___GG_CHAT_MARKER___', name: 'GG_MARKER' }];
+                    presetMessages = await buildChatMessagesWithPromptManager(context, markerMessages, presetName, { prompt: '', includeChatHistory: false });
+                }
+                
+                finalMessages = assembleMessages(currentPrompts, variableMap, presetMessages);
+            } else {
+                promptForModel = fillPromptTemplate(promptTemplate, templateData);
+            }
 
             // Toggle send button state to show generation is happening
             setSendButtonState?.(true);
@@ -783,7 +917,13 @@ export class EditDescriptionPopup {
 
             let generatedDescription = '';
 
-            if (this.genWithoutPreset) {
+            if (useDynamicBlocks) {
+                debugLog('[EditDescription] Generating using dynamic prompt blocks with requestCompletion...');
+                generatedDescription = await requestCompletion({
+                    messages: finalMessages,
+                    optionsOverrides: { bypassPromptManager: true }
+                });
+            } else if (this.genWithoutPreset) {
                 try {
                     debugLog('[EditDescription] Generating without preset using /genraw...');
                     // Use {{newline}} macro so ST's parser replaces it with real newlines 

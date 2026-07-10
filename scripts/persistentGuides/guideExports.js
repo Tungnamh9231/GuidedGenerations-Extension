@@ -132,7 +132,7 @@ const defaultSettings = {
 
 // Utility functions
 import { getProfileApiType, getPresetsForApiType, getCurrentProfile, getProfileList, getConnectApiMap, extractApiIdFromApiType } from '../utils/presetUtils.js';
-import { requestCompletion, shouldUseDirectCall } from '../utils/llmClient.js';
+import { requestCompletion, shouldUseDirectCall, buildChatMessagesWithPromptManager } from '../utils/llmClient.js';
 import { getPromptObject, getPromptValue, fillPromptTemplate, loadPromptCatalog } from '../utils/promptManager.js';
 
 // Guide functions
@@ -206,6 +206,7 @@ export {
     getPromptValue,
     fillPromptTemplate,
     loadPromptCatalog,
+    buildChatMessagesWithPromptManager,
     
     // Guides
     runGuideScript,

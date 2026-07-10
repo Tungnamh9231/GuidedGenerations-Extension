@@ -580,7 +580,7 @@ function getOpenAIPresetByName(helpers, presetName) {
     return structuredClone(preset);
 }
 
-async function buildChatMessagesWithPromptManager(context, baseMessages, presetName = '', options = {}) {
+export async function buildChatMessagesWithPromptManager(context, baseMessages, presetName = '', options = {}) {
     const helpers = await getOpenAIPromptManagerHelpers();
     if (!helpers?.prepareOpenAIMessages || !helpers?.setupChatCompletionPromptManager) {
         debugWarn(`[${extensionName}] Prompt manager helpers unavailable, using base messages.`);
@@ -836,12 +836,14 @@ export async function requestCompletion({
     }
 
     if (mode === 'chat') {
-        requestData.messages = await buildChatMessagesWithPromptManager(
-            context,
-            requestData.messages,
-            resolvedPresetName,
-            { prompt, includeChatHistory, includeIdentityContext }
-        );
+        if (!optionsOverrides?.bypassPromptManager) {
+            requestData.messages = await buildChatMessagesWithPromptManager(
+                context,
+                requestData.messages,
+                resolvedPresetName,
+                { prompt, includeChatHistory, includeIdentityContext }
+            );
+        }
     }
 
     const options = {

@@ -975,3 +975,292 @@
     user-select: none;
     opacity: 0.9;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Dynamic Prompt Block Manager
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gg-prompt-blocks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* ── Individual Block ── */
+.gg-prompt-block {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    transition: opacity 0.2s, border-color 0.2s;
+}
+
+.gg-prompt-block:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.gg-prompt-block-disabled {
+    opacity: 0.45;
+}
+
+.gg-prompt-block-disabled .gg-prompt-block-name {
+    text-decoration: line-through;
+}
+
+.gg-prompt-block-preset {
+    border-color: rgba(255, 193, 7, 0.3);
+    background: rgba(255, 193, 7, 0.05);
+}
+
+/* ── Block Header ── */
+.gg-prompt-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    min-height: 36px;
+    gap: 8px;
+}
+
+.gg-prompt-block-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.gg-prompt-block-name {
+    font-size: 0.9em;
+    color: var(--SmartThemeBodyColor, #ddd);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gg-prompt-block-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+/* ── Toggle Switch ── */
+.gg-prompt-toggle {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.gg-prompt-toggle-input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.gg-prompt-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 18px;
+    transition: background-color 0.25s;
+}
+
+.gg-prompt-toggle-slider::before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 2px;
+    bottom: 2px;
+    background-color: #999;
+    border-radius: 50%;
+    transition: transform 0.25s, background-color 0.25s;
+}
+
+.gg-prompt-toggle-input:checked + .gg-prompt-toggle-slider {
+    background-color: rgba(76, 175, 80, 0.4);
+}
+
+.gg-prompt-toggle-input:checked + .gg-prompt-toggle-slider::before {
+    transform: translateX(14px);
+    background-color: #4caf50;
+}
+
+/* ── Role Badge ── */
+.gg-prompt-role-badge {
+    font-size: 0.7em;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    letter-spacing: 0.5px;
+}
+
+.gg-role-system {
+    background: rgba(100, 149, 237, 0.25);
+    color: #93b5f5;
+}
+
+.gg-role-user {
+    background: rgba(76, 175, 80, 0.25);
+    color: #81c784;
+}
+
+.gg-role-assistant {
+    background: rgba(255, 152, 0, 0.25);
+    color: #ffb74d;
+}
+
+.gg-role-preset {
+    background: rgba(255, 193, 7, 0.25);
+    color: #ffd54f;
+}
+
+/* ── Action Buttons ── */
+.gg-prompt-move-btn,
+.gg-prompt-action-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--SmartThemeBodyColor, #aaa);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.8em;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+}
+
+.gg-prompt-move-btn:hover:not(:disabled),
+.gg-prompt-action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.gg-prompt-move-btn:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+}
+
+.gg-prompt-delete-btn:hover {
+    background: rgba(244, 67, 54, 0.2) !important;
+    color: #f44336 !important;
+}
+
+.gg-prompt-lock {
+    font-size: 0.85em;
+    opacity: 0.5;
+    padding: 0 4px;
+}
+
+/* ── Inline Editor ── */
+.gg-prompt-block-editor {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.15);
+}
+
+.gg-prompt-editor-row {
+    display: flex;
+    gap: 10px;
+}
+
+.gg-prompt-editor-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.gg-prompt-editor-field label {
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.gg-prompt-editor-name,
+.gg-prompt-editor-role {
+    font-size: 0.9em;
+    padding: 4px 8px;
+}
+
+.gg-prompt-editor-content {
+    font-size: 0.85em;
+    resize: vertical;
+    min-height: 80px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    line-height: 1.5;
+    padding: 8px;
+}
+
+/* ── Footer Buttons ── */
+.gg-prompt-blocks-footer {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.gg-prompt-add-btn {
+    flex: 1;
+}
+
+.gg-prompt-reset-btn {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.gg-prompt-reset-btn:hover {
+    opacity: 1;
+}
+
+/* ── Variable Guide ── */
+.gg-prompt-variables-guide {
+    margin-top: 10px;
+}
+
+.gg-variables-details {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.gg-variables-details summary {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 0.9em;
+    color: var(--SmartThemeBodyColor, #ccc);
+    user-select: none;
+}
+
+.gg-variables-details summary:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.gg-variables-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+}
+
+.gg-variables-table td {
+    padding: 5px 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--SmartThemeBodyColor, #bbb);
+}
+
+.gg-variables-table td:first-child {
+    width: 90px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    color: #ffd54f;
+    white-space: nowrap;
+}
