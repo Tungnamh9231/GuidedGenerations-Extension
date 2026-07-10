@@ -24,6 +24,7 @@ import {
 
 import {
     loadBlocks,
+    saveBlocks,
     renderPromptBlocksUI,
     assembleMessages,
     getDefaultEditDescriptionBlocks,
@@ -262,7 +263,6 @@ export class EditDescriptionPopup {
         this.initialized = false;
         this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomDescCommand') || '';
         this.formatEnabled = localStorage.getItem('gg_editDescFormatEnabled') !== 'false';
-        this.genWithoutPreset = localStorage.getItem('gg_editDescGenWithoutPreset') === 'true';
         this._previousDescription = null; // Stored before gen for diff
         this._pendingGeneratedDescription = null; // Stored for Apply button
         this._isDiffMode = false; // Currently showing diff?
@@ -387,12 +387,6 @@ export class EditDescriptionPopup {
                             </div>
                         </div>
                         <div class="gg-popup-footer-wrap">
-                            <div style="display: flex; gap: 15px; margin-bottom: 10px;" id="gg-checkboxes-container">
-                                <div class="gg-checkbox-row" style="margin: 0;">
-                                    <input type="checkbox" id="gg-gen-without-preset-checkbox" ${this.genWithoutPreset ? 'checked' : ''}>
-                                    <label for="gg-gen-without-preset-checkbox">Gen without preset</label>
-                                </div>
-                            </div>
                             <div class="gg-popup-footer">
                                 <button id="ggRevertEdit" class="gg-button gg-button-secondary" style="display: none;">Revert</button>
                                 <button id="ggApplyEdit" class="gg-button gg-button-primary" style="display: none;">Apply</button>
@@ -414,6 +408,7 @@ export class EditDescriptionPopup {
                 const promptsContainer = document.getElementById('gg-desc-prompts-container');
                 if (promptsContainer) {
                     const currentBlocks = this.promptsMap[this.currentPromptMode] || [];
+
                     renderPromptBlocksUI(promptsContainer, currentBlocks, {
                         settingKey: `editDescCustomPrompts_${this.currentPromptMode}`,
                         getDefaults: () => getDefaultEditDescriptionBlocks(this.currentPromptMode),
@@ -421,19 +416,12 @@ export class EditDescriptionPopup {
                         onResetAll: () => {
                             for (const modeKey of Object.keys(EDIT_DESCRIPTION_MODES)) {
                                 this.promptsMap[modeKey] = getDefaultEditDescriptionBlocks(modeKey);
-                                localStorage.setItem(`gg_editDescCustomPrompts_${modeKey}`, JSON.stringify(this.promptsMap[modeKey]));
+                                saveBlocks(`editDescCustomPrompts_${modeKey}`, this.promptsMap[modeKey]);
                             }
                             return this.promptsMap[this.currentPromptMode];
                         },
                         onBlocksChanged: (blocks) => { 
                             this.promptsMap[this.currentPromptMode] = blocks; 
-                            const pb = blocks.find(b => b.type === 'preset');
-                            if (pb && this.genWithoutPreset !== !pb.enabled) {
-                                this.genWithoutPreset = !pb.enabled;
-                                localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
-                                const cb = document.getElementById('gg-gen-without-preset-checkbox');
-                                if (cb) cb.checked = this.genWithoutPreset;
-                            }
                         }
                     });
                 }
@@ -493,37 +481,6 @@ export class EditDescriptionPopup {
             }
             this._clearDiffState();
             this.close();
-        });
-
-        const genWithoutPresetCheckbox = this.popupElement.querySelector('#gg-gen-without-preset-checkbox');
-
-        // Checkbox state persistence
-        genWithoutPresetCheckbox?.addEventListener('change', (e) => {
-            this.genWithoutPreset = e.target.checked;
-            localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
-            // Sync with preset block
-            const presetBlock = this.prompts.find(b => b.type === 'preset');
-            if (presetBlock) {
-                presetBlock.enabled = !this.genWithoutPreset;
-                const promptsContainer = document.getElementById('gg-desc-prompts-container');
-                if (promptsContainer) {
-                    renderPromptBlocksUI(promptsContainer, this.prompts, {
-                        settingKey: 'editDescCustomPrompts',
-                        getDefaults: getDefaultEditDescriptionBlocks,
-                        variableGuideHtml: EDIT_DESC_VARIABLES_HTML,
-                        onBlocksChanged: (blocks) => { 
-                            this.prompts = blocks; 
-                            const pb = blocks.find(b => b.type === 'preset');
-                            if (pb && this.genWithoutPreset !== !pb.enabled) {
-                                this.genWithoutPreset = !pb.enabled;
-                                localStorage.setItem('gg_editDescGenWithoutPreset', String(this.genWithoutPreset));
-                                const cb = document.getElementById('gg-gen-without-preset-checkbox');
-                                if (cb) cb.checked = this.genWithoutPreset;
-                            }
-                        }
-                    });
-                }
-            }
         });
 
         // Tabs

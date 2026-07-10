@@ -16,6 +16,7 @@ import {
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
 import {
     loadBlocks,
+    saveBlocks,
     renderPromptBlocksUI,
     assembleMessages,
     getDefaultEditIntrosBlocks,
@@ -33,7 +34,6 @@ export class EditIntrosPopup {
         this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomCommand') || ''; // Load last command
         // Track how many times applyChanges is called
         this.applyChangesCount = 0;
-        this.genWithoutPreset = localStorage.getItem('gg_editIntrosGenWithoutPreset') === 'true';
         this.currentPromptMode = 'editIntros.editExisting';
         this.promptsMap = {};
     }
@@ -94,12 +94,6 @@ export class EditIntrosPopup {
                             </div>
                         </div>
                         <div class="gg-popup-footer-wrap">
-                            <div style="display: flex; gap: 15px; margin-bottom: 10px; padding: 0 10px;" id="gg-checkboxes-container">
-                                <div class="gg-checkbox-row" style="margin: 0;">
-                                    <input type="checkbox" id="gg-intros-gen-without-preset-checkbox" ${this.genWithoutPreset ? 'checked' : ''}>
-                                    <label for="gg-intros-gen-without-preset-checkbox">Gen without preset</label>
-                                </div>
-                            </div>
                         <div class="gg-popup-footer">
                             <button id="ggCancelEditIntros" class="gg-button gg-button-secondary">Cancel</button>
                             <button id="ggMakeNewIntro" class="gg-button gg-button-primary">Make New Intro</button>
@@ -119,6 +113,7 @@ export class EditIntrosPopup {
                 const promptsContainer = document.getElementById('gg-intros-prompts-container');
                 if (promptsContainer) {
                     const currentBlocks = this.promptsMap[this.currentPromptMode] || [];
+
                     renderPromptBlocksUI(promptsContainer, currentBlocks, {
                         settingKey: `editIntrosCustomPrompts_${this.currentPromptMode}`,
                         getDefaults: () => getDefaultEditIntrosBlocks(this.currentPromptMode),
@@ -126,19 +121,12 @@ export class EditIntrosPopup {
                         onResetAll: () => {
                             for (const modeKey of Object.keys(EDIT_INTROS_MODES)) {
                                 this.promptsMap[modeKey] = getDefaultEditIntrosBlocks(modeKey);
-                                localStorage.setItem(`gg_editIntrosCustomPrompts_${modeKey}`, JSON.stringify(this.promptsMap[modeKey]));
+                                saveBlocks(`editIntrosCustomPrompts_${modeKey}`, this.promptsMap[modeKey]);
                             }
                             return this.promptsMap[this.currentPromptMode];
                         },
                         onBlocksChanged: (blocks) => { 
                             this.promptsMap[this.currentPromptMode] = blocks; 
-                            const pb = blocks.find(b => b.type === 'preset');
-                            if (pb && this.genWithoutPreset !== !pb.enabled) {
-                                this.genWithoutPreset = !pb.enabled;
-                                localStorage.setItem('gg_editIntrosGenWithoutPreset', String(this.genWithoutPreset));
-                                const cb = document.getElementById('gg-intros-gen-without-preset-checkbox');
-                                if (cb) cb.checked = this.genWithoutPreset;
-                            }
                         }
                     });
                 }
@@ -168,20 +156,6 @@ export class EditIntrosPopup {
         const applyButton = this.popupElement.querySelector('#ggApplyEditIntros');
         const makeNewIntroButton = this.popupElement.querySelector('#ggMakeNewIntro');
         const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
-        const genWithoutPresetCheckbox = this.popupElement.querySelector('#gg-intros-gen-without-preset-checkbox');
-
-        genWithoutPresetCheckbox?.addEventListener('change', (e) => {
-            this.genWithoutPreset = e.target.checked;
-            localStorage.setItem('gg_editIntrosGenWithoutPreset', String(this.genWithoutPreset));
-            const currentBlocks = this.promptsMap[this.currentPromptMode] || [];
-            const presetBlock = currentBlocks.find(b => b.type === 'preset');
-            if (presetBlock) {
-                presetBlock.enabled = !this.genWithoutPreset;
-                if (typeof this._renderBlocks === 'function') {
-                    this._renderBlocks();
-                }
-            }
-        });
 
         // Prompt Mode Dropdown
         const modeSelect = this.popupElement.querySelector('#gg-intros-prompt-mode-select');

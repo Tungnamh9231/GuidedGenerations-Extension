@@ -22,6 +22,8 @@ import { getPresetManager } from '../../../../scripts/preset-manager.js';
 import { loadSettingsPanel } from './scripts/settingsPanel.js';
 import { showVersionNotification } from './scripts/ui/versionNotificationPopup.js';
 import { getProfileList, getPromptValue } from './scripts/persistentGuides/guideExports.js';
+import editDescriptionPopup from './scripts/tools/editDescriptionPopup.js';
+import editIntrosPopup from './scripts/tools/editIntrosPopup.js';
 
 // Import auto-triggerable guides
 import thinkingGuide from './scripts/persistentGuides/thinkingGuide.js';
@@ -1622,6 +1624,10 @@ async function setup() {
     setupQRMutationObserver();
     // Initialize listeners for guided continue functionality
     initGuidedContinueListeners();
+    
+    // Initialize popups to preload their states from extension_settings
+    await editDescriptionPopup.init();
+    await editIntrosPopup.init();
 }
 
 // Debounced version of the counter update function
