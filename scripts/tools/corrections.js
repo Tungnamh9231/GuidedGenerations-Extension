@@ -8,8 +8,6 @@ import {
     debugLog,
     requestCompletion,
     shouldUseDirectCall,
-    getProfileApiType,
-    extractApiIdFromApiType,
     getPromptValue,
     fillPromptTemplate,
     deactivateSendButtons,
@@ -19,39 +17,31 @@ import {
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
 
 let lastCorrectionInstruction = '';
-const TEXT_API_IDS = new Set([
-    'textgenerationwebui',
-    'kobold',
-    'koboldhorde',
-    'novel',
-    'novelai',
-    'textgen',
-    'text',
-    'llamacpp',
-]);
 
-function resolveProfileByNameOrId(profileName, profiles = []) {
-    if (!profileName) return null;
-    return profiles.find((profile) => profile?.name === profileName || profile?.id === profileName) || null;
+const SCRIPT_PROMPT_KEY = 'script_inject_';
+const INJECT_POSITIONS = { chat: 1 };
+const INJECT_ROLES = { system: 0, user: 1, assistant: 2 };
+
+function setTemporaryInjection(context, id, value, { position = INJECT_POSITIONS.chat, depth = 0, scan = true, role = INJECT_ROLES.system } = {}) {
+    if (!context.chatMetadata) context.chatMetadata = {};
+    if (!context.chatMetadata.script_injects) context.chatMetadata.script_injects = {};
+    context.chatMetadata.script_injects[id] = { value, position, depth, scan, role, filter: null };
+    context.setExtensionPrompt?.(`${SCRIPT_PROMPT_KEY}${id}`, value, position, depth, scan, role);
+    context.saveMetadataDebounced?.();
 }
 
-function resolveCompletionMode(profile, apiType, apiId) {
-    const rawMode = profile?.mode ? String(profile.mode).toLowerCase() : '';
-    if (rawMode.includes('text')) return 'text';
-    if (rawMode.includes('chat')) return 'chat';
+function flushTemporaryInjection(context, id) {
+    const existingInject = context.chatMetadata?.script_injects?.[id];
+    const position = existingInject?.position ?? INJECT_POSITIONS.chat;
+    const depth = existingInject?.depth ?? 0;
+    const scan = existingInject?.scan ?? true;
+    const role = existingInject?.role ?? INJECT_ROLES.system;
 
-    const typeKey = (apiId || apiType || '').toLowerCase();
-    if (TEXT_API_IDS.has(typeKey)) return 'text';
-    return 'chat';
-}
-
-function buildChatHistoryBlock(chat = []) {
-    return chat.map((message, index) => {
-        const role = message?.is_system ? 'system' : message?.is_user ? 'user' : 'assistant';
-        const name = message?.name ? ` ${message.name}` : '';
-        const content = message?.mes || '';
-        return `[${index + 1}] ${role}${name}: ${content}`;
-    }).join('\n\n');
+    if (context.chatMetadata?.script_injects) {
+        delete context.chatMetadata.script_injects[id];
+    }
+    context.setExtensionPrompt?.(`${SCRIPT_PROMPT_KEY}${id}`, '', position, depth, scan, role);
+    context.saveMetadataDebounced?.();
 }
 
 function escapeHtml(value = '') {
@@ -70,7 +60,7 @@ class CorrectionsPopup {
         this.initialized = false;
         this.messageIndex = null;
         this.swipeIndex = null;
-        this.includeChatHistory = true;
+        this.sendWithoutPreset = localStorage.getItem('gg_correctionsGenWithoutPreset') === 'true';
         this.selectionStart = null;
         this.selectionEnd = null;
     }
@@ -114,8 +104,8 @@ class CorrectionsPopup {
                                 <textarea id="ggCorrectionsInstruction" rows="4" placeholder="Describe what should be changed..."></textarea>
                             </div>
                             <div class="gg-popup-section gg-setting-inline">
-                                <input id="ggCorrectionsIncludeHistory" type="checkbox" checked>
-                                <label for="ggCorrectionsIncludeHistory">Include chat history with the request</label>
+                                <input id="ggCorrectionsSendWithoutPreset" type="checkbox">
+                                <label for="ggCorrectionsSendWithoutPreset">Send without preset</label>
                             </div>
                             <div class="gg-popup-section gg-popup-note">
                                 When selecting text, the model will only rewrite the highlighted part. If nothing is selected, the entire message is rewritten.
@@ -151,7 +141,7 @@ class CorrectionsPopup {
         const nextMessageButton = this.popupElement.querySelector('#ggCorrectionsNextMessage');
         const prevSwipeButton = this.popupElement.querySelector('#ggCorrectionsPrevSwipe');
         const nextSwipeButton = this.popupElement.querySelector('#ggCorrectionsNextSwipe');
-        const includeHistoryCheckbox = this.popupElement.querySelector('#ggCorrectionsIncludeHistory');
+        const sendWithoutPresetCheckbox = this.popupElement.querySelector('#ggCorrectionsSendWithoutPreset');
         const messageTextarea = this.popupElement.querySelector('#ggCorrectionsMessage');
 
         closeButton?.addEventListener('click', () => this.close());
@@ -163,8 +153,9 @@ class CorrectionsPopup {
         prevSwipeButton?.addEventListener('click', () => this.changeSwipe(-1));
         nextSwipeButton?.addEventListener('click', () => this.changeSwipe(1));
 
-        includeHistoryCheckbox?.addEventListener('change', (event) => {
-            this.includeChatHistory = !!event.target.checked;
+        sendWithoutPresetCheckbox?.addEventListener('change', (event) => {
+            this.sendWithoutPreset = !!event.target.checked;
+            localStorage.setItem('gg_correctionsGenWithoutPreset', String(this.sendWithoutPreset));
         });
 
         if (messageTextarea) {
@@ -218,10 +209,9 @@ class CorrectionsPopup {
             instructionTextarea.value = lastCorrectionInstruction;
         }
 
-        const includeHistoryCheckbox = this.popupElement.querySelector('#ggCorrectionsIncludeHistory');
-        if (includeHistoryCheckbox) {
-            includeHistoryCheckbox.checked = true;
-            this.includeChatHistory = true;
+        const sendWithoutPresetCheckbox = this.popupElement.querySelector('#ggCorrectionsSendWithoutPreset');
+        if (sendWithoutPresetCheckbox) {
+            sendWithoutPresetCheckbox.checked = this.sendWithoutPreset;
         }
 
         this.updateMessageDisplay();
@@ -482,26 +472,12 @@ class CorrectionsPopup {
         });
         const filledPrompt = fillPromptTemplate(promptTemplate, { input: instruction });
 
-        const profiles = context?.extensionSettings?.connectionManager?.profiles || [];
-        const selectedProfileId = context?.extensionSettings?.connectionManager?.selectedProfile || '';
-        let profile = resolveProfileByNameOrId(profileValue, profiles);
-        if (!profile && selectedProfileId) {
-            profile = profiles.find((entry) => entry?.id === selectedProfileId) || null;
-        }
-        const resolvedProfileName = profile?.name || profileValue || selectedProfileId || '';
-        const apiType = profile?.api || (await getProfileApiType(resolvedProfileName));
-        const apiId = extractApiIdFromApiType(apiType) || apiType;
-        const completionMode = resolveCompletionMode(profile, apiType, apiId);
-        const historyBlock = (this.includeChatHistory && completionMode === 'text')
-            ? buildChatHistoryBlock(context.chat || [])
-            : '';
-
         const taskTemplate = hasSelection
             ? await getPromptValue('corrections.selectedTextTask', '')
             : await getPromptValue('corrections.fullMessageTask', '');
         const promptForModel = fillPromptTemplate(taskTemplate, {
             instruction: filledPrompt,
-            historyBlock: historyBlock ? `\n\nEarlier conversation history (oldest first; may be truncated by context limits):\n${historyBlock}\n\n--- End of history ---` : '',
+            historyBlock: '', // No history block in prompt template
             baseMessage,
             selectedText,
         });
@@ -519,12 +495,7 @@ class CorrectionsPopup {
             deactivateSendButtons?.();
 
             try {
-                if (useDirectCall) {
-                    // Corrections embeds its own chat history directly into the
-                    // prompt template (via {{historyBlock}}), so we pass
-                    // includeChatHistory: false here to avoid duplicating it
-                    // through the prompt manager. Identity context (char/user
-                    // descriptions, scenario, world info) is still attached.
+                if (useDirectCall && !this.sendWithoutPreset) {
                     correctedText = await requestCompletion({
                         profileName: profileValue,
                         presetName: targetPreset,
@@ -534,12 +505,48 @@ class CorrectionsPopup {
                         includeIdentityContext: true,
                     });
                 } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                    const command = this.includeChatHistory ? '/gen' : '/genraw';
-                    const result = await context.executeSlashCommandsWithOptions(`${command} ${promptForModel}`, {
-                        showOutput: false,
-                        handleExecutionErrors: true,
-                    });
-                    correctedText = result?.pipe || '';
+                    if (this.sendWithoutPreset) {
+                        const escapedPrompt = promptForModel.replace(/\r?\n/g, '{{newline}}');
+                        const result = await context.executeSlashCommandsWithOptions(`/genraw quiet=true ${escapedPrompt} |`, {
+                            showOutput: false,
+                            handleExecutionErrors: true,
+                        });
+                        correctedText = result?.pipe || '';
+                    } else {
+                        const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
+                        const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
+                        setTemporaryInjection(context, 'correctionsInstruct', promptForModel, { role });
+
+                        const originalChat = [...(context.chat || [])];
+                        if (context.chat) {
+                            context.chat.length = 0;
+                            // Add dummy system message to prevent greeting generation
+                            context.chat.push({
+                                name: 'System',
+                                is_user: false,
+                                is_system: true,
+                                send_date: Date.now(),
+                                mes: 'Applying correction...',
+                                extra: { type: 'temp_correction_gen' }
+                            });
+                        }
+
+                        try {
+                            const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
+                                showOutput: false,
+                                handleExecutionErrors: true,
+                            });
+                            correctedText = genResult?.pipe || '';
+                        } finally {
+                            flushTemporaryInjection(context, 'correctionsInstruct');
+                            if (context.chat) {
+                                context.chat.length = 0;
+                                context.chat.push(...originalChat);
+                                if (typeof context.saveChat === 'function') await context.saveChat();
+                                if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+                            }
+                        }
+                    }
                 } else {
                     console.error('[GuidedGenerations][Corrections] context.executeSlashCommandsWithOptions not found.');
                 }

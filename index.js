@@ -3,6 +3,7 @@ import { eventSource, saveSettingsDebounced } from '../../../../script.js'; // F
 
 // Import button logic from separate modules
 import { simpleSend } from './scripts/simpleSend.js';
+import { simpleSendCharacter } from './scripts/simpleSendCharacter.js';
 import { recoverInput } from './scripts/inputRecovery.js';
 import { guidedResponse } from './scripts/guidedResponse.js';
 import { guidedSwipe } from './scripts/guidedSwipe.js';
@@ -21,6 +22,8 @@ import { getPresetManager } from '../../../../scripts/preset-manager.js';
 import { loadSettingsPanel } from './scripts/settingsPanel.js';
 import { showVersionNotification } from './scripts/ui/versionNotificationPopup.js';
 import { getProfileList, getPromptValue } from './scripts/persistentGuides/guideExports.js';
+import editDescriptionPopup from './scripts/tools/editDescriptionPopup.js';
+import editIntrosPopup from './scripts/tools/editIntrosPopup.js';
 
 // Import auto-triggerable guides
 import thinkingGuide from './scripts/persistentGuides/thinkingGuide.js';
@@ -189,8 +192,10 @@ export const defaultSettings = {
     showGuidedResponse: true, // Default on for Guided Response
     showGuidedSwipe: true, // Default on for Guided Swipe
     showSimpleSendButton: false, // Individual tool button toggles
+    showSimpleSendCharacterButton: false,
     showRecoverInputButton: false,
     showEditIntrosButton: false,
+    showEditDescriptionButton: false,
     showCorrectionsButton: false,
     showSeparatedThinkingButton: false,
     showSpellcheckerButton: false,
@@ -234,6 +239,9 @@ export const defaultSettings = {
     profileEditIntros: '', // Profile for Edit Intros
     presetEditIntros: '',
     profileEditIntrosApiType: '', // API type for Edit Intros profile
+    profileEditDescription: '', // Profile for Edit Description
+    presetEditDescription: '',
+    profileEditDescriptionApiType: '', // API type for Edit Description profile
     profileImpersonate1st: '', // Profile for Impersonate 1st Person
     presetImpersonate1st: '',
     profileImpersonate1stApiType: '', // API type for Impersonate 1st Person profile
@@ -387,7 +395,7 @@ function migrateProfileSettings() {
     // List of all preset keys that need corresponding profile keys
     const presetKeys = [
         'presetClothes', 'presetState', 'presetThinking', 'presetSituational', 'presetRules',
-        'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros',
+        'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros', 'presetEditDescription',
         'presetImpersonate1st', 'presetImpersonate2nd', 'presetImpersonate3rd',
         'presetCustomAuto', 'presetFun'
     ];
@@ -459,7 +467,7 @@ async function updateSettingsUI() {
             debugLog(`[${extensionName}] Profile list received:`, profileList);
             
             const profileKeys = ['profileClothes','profileState','profileThinking','profileSituational','profileRules',
-             'profileCustom','profileCorrections','profileSeparatedThinking','profileSpellchecker','profileEditIntros',
+             'profileCustom','profileCorrections','profileSeparatedThinking','profileSpellchecker','profileEditIntros','profileEditDescription',
              'profileImpersonate1st','profileImpersonate2nd','profileImpersonate3rd',
              'profileCustomAuto','profileFun','profileTrackerDetermine','profileTrackerUpdate'
             ];
@@ -495,7 +503,7 @@ async function updateSettingsUI() {
 
         // Populate preset dropdowns with correct presets for selected profiles
         ['presetClothes','presetState','presetThinking','presetSituational','presetRules',
-         'presetCustom','presetCorrections','presetSeparatedThinking','presetSpellchecker','presetEditIntros',
+         'presetCustom','presetCorrections','presetSeparatedThinking','presetSpellchecker','presetEditIntros','presetEditDescription',
          'presetImpersonate1st','presetImpersonate2nd','presetImpersonate3rd',
          'presetCustomAuto','presetFun','presetTrackerDetermine','presetTrackerUpdate'
         ].forEach(async (key) => {
@@ -650,8 +658,8 @@ function handleSettingChange(event) {
         settingValue = target.value;
         
         // Handle preset and profile dropdowns - no validation needed as values are preset IDs or profile names
-        const presetFields = ['presetClothes', 'presetState', 'presetThinking', 'presetSituational', 'presetRules', 'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros', 'presetImpersonate1st', 'presetImpersonate2nd', 'presetImpersonate3rd', 'presetCustomAuto'];
-        const profileFields = ['profileClothes', 'profileState', 'profileThinking', 'profileSituational', 'profileRules', 'profileCustom', 'profileCorrections', 'profileSeparatedThinking', 'profileSpellchecker', 'profileEditIntros', 'profileImpersonate1st', 'profileImpersonate2nd', 'profileImpersonate3rd', 'profileCustomAuto', 'profileFun', 'profileTracker'];
+        const presetFields = ['presetClothes', 'presetState', 'presetThinking', 'presetSituational', 'presetRules', 'presetCustom', 'presetCorrections', 'presetSeparatedThinking', 'presetSpellchecker', 'presetEditIntros', 'presetEditDescription', 'presetImpersonate1st', 'presetImpersonate2nd', 'presetImpersonate3rd', 'presetCustomAuto'];
+        const profileFields = ['profileClothes', 'profileState', 'profileThinking', 'profileSituational', 'profileRules', 'profileCustom', 'profileCorrections', 'profileSeparatedThinking', 'profileSpellchecker', 'profileEditIntros', 'profileEditDescription', 'profileImpersonate1st', 'profileImpersonate2nd', 'profileImpersonate3rd', 'profileCustomAuto', 'profileFun', 'profileTracker'];
         if (presetFields.includes(settingName) || profileFields.includes(settingName)) {
             // Values are preset IDs (numbers) or profile names, no pipe validation needed
             settingValue = settingValue.trim();
@@ -919,6 +927,17 @@ function updateExtensionButtons() {
             event.stopPropagation();
         });
 
+        const simpleSendCharacterMenuItem = document.createElement('a');
+        simpleSendCharacterMenuItem.href = '#';
+        simpleSendCharacterMenuItem.className = 'interactable';
+        simpleSendCharacterMenuItem.innerHTML = '<i class="fa-solid fa-user-ninja fa-fw"></i><span data-i18n="Simple Send: Character">Simple Send: Character</span>';
+        simpleSendCharacterMenuItem.title = "Sends the current input directly to the Chat as the Character without triggering a response.";
+        simpleSendCharacterMenuItem.addEventListener('click', (event) => {
+            simpleSendCharacter();
+            ggToolsMenu.classList.remove('shown');
+            event.stopPropagation();
+        });
+
         const recoverInputMenuItem = document.createElement('a');
         recoverInputMenuItem.href = '#';
         recoverInputMenuItem.className = 'interactable'; // Use interactable class
@@ -940,6 +959,19 @@ function updateExtensionButtons() {
         editIntrosMenuItem.addEventListener('click', async (event) => {
             const editIntros = await import('./scripts/tools/editIntros.js');
             await editIntros.default();
+            ggToolsMenu.classList.remove('shown');
+            event.stopPropagation();
+        });
+
+        // 1.5. Edit Description
+        const editDescriptionMenuItem = document.createElement('a');
+        editDescriptionMenuItem.href = '#';
+        editDescriptionMenuItem.className = 'interactable';
+        editDescriptionMenuItem.innerHTML = '<i class="fa-solid fa-address-card fa-fw"></i><span data-i18n="Edit Description">Edit Description</span>';
+        editDescriptionMenuItem.title = "Opens a popup to generate or edit the character description based on instructions.";
+        editDescriptionMenuItem.addEventListener('click', async (event) => {
+            const editDescription = await import('./scripts/tools/editDescription.js');
+            await editDescription.default();
             ggToolsMenu.classList.remove('shown');
             event.stopPropagation();
         });
@@ -1059,6 +1091,7 @@ function updateExtensionButtons() {
 
         // Add original items first
         ggToolsMenu.appendChild(simpleSendMenuItem);
+        ggToolsMenu.appendChild(simpleSendCharacterMenuItem);
         ggToolsMenu.appendChild(recoverInputMenuItem);
         
         // Add a separator
@@ -1089,6 +1122,7 @@ function updateExtensionButtons() {
 
         // Add new items after the separator
         ggToolsMenu.appendChild(editIntrosMenuItem);
+        ggToolsMenu.appendChild(editDescriptionMenuItem);
         ggToolsMenu.appendChild(correctionsMenuItem);
         ggToolsMenu.appendChild(separatedThinkingMenuItem);
         ggToolsMenu.appendChild(spellcheckerMenuItem);
@@ -1300,6 +1334,12 @@ function updateExtensionButtons() {
         regularButtons.push(simpleSendButton);
     }
     
+    // Simple Send Character button
+    if (settings.showSimpleSendCharacterButton) {
+        const simpleSendCharacterButton = createActionButton('gg_simple_send_character_button', 'Simple Send: Character', 'fa-solid fa-user-ninja', simpleSendCharacter);
+        regularButtons.push(simpleSendCharacterButton);
+    }
+    
     // Recover Input button
     if (settings.showRecoverInputButton) {
         const recoverInputButton = createActionButton('gg_recover_input_button', 'Recover Input', 'fa-solid fa-arrow-rotate-left', recoverInput);
@@ -1313,6 +1353,15 @@ function updateExtensionButtons() {
             await editIntros.default();
         });
         regularButtons.push(editIntrosButton);
+    }
+    
+    // Edit Description button
+    if (settings.showEditDescriptionButton) {
+        const editDescriptionButton = createActionButton('gg_edit_description_button', 'Edit Description', 'fa-solid fa-address-card', async () => {
+            const editDescription = await import('./scripts/tools/editDescription.js');
+            await editDescription.default();
+        });
+        regularButtons.push(editDescriptionButton);
     }
     
     // Corrections button
@@ -1575,6 +1624,10 @@ async function setup() {
     setupQRMutationObserver();
     // Initialize listeners for guided continue functionality
     initGuidedContinueListeners();
+    
+    // Initialize popups to preload their states from extension_settings
+    await editDescriptionPopup.init();
+    await editIntrosPopup.init();
 }
 
 // Debounced version of the counter update function
@@ -1963,6 +2016,7 @@ async function checkVersionAndNotify() {
 // Expose functions to the global scope for buttons or STScripts
 window.GuidedGenerations = {
     simpleSend,
+    simpleSendCharacter,
     guidedSwipe,
     guidedContinue,
     undoLastGuidedAddition, // Expose new function

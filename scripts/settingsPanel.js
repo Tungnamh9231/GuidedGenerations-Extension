@@ -176,21 +176,6 @@ export async function loadSettingsPanel() {
                     });
                 });
 
-                // Setup default buttons with native event handlers
-                const defaultButtons = container.querySelectorAll('.gg-default-button');
-                defaultButtons.forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        const key = btn.getAttribute('data-target'); // e.g., 'promptGuidedSwipe'
-                        const input = document.getElementById(`gg_${key}`); // e.g., '#gg_promptGuidedSwipe'
-                        if (input && defaultSettings.hasOwnProperty(key)) {
-                            input.value = defaultSettings[key];
-                            // Trigger change event to ensure SillyTavern recognizes the update
-                            input.dispatchEvent(new Event('change', { bubbles: true })); 
-                        } else {
-                            debugWarn(`[${extensionName}] Could not find input for gg_${key} or default setting for ${key}`);
-                        }
-                    });
-                });
 
                 const downloadDefaultPromptsButton = container.querySelector('#ggDownloadDefaultPrompts');
                 if (downloadDefaultPromptsButton) {

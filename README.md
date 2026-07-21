@@ -2,9 +2,11 @@
   <img src="Media/GG Logo Text.png" alt="Guided Generations" width="600">
 </p>
 
-# Guided Generations Extension for SillyTavern
+# GuidedGeneration-Fork
 
-This extension brings the full power of the original "Guided Generations" Quick Reply set to SillyTavern as a native extension. It provides modular, context-aware tools for shaping, refining, and guiding AI responses—ideal for roleplay, story, and character-driven chats. All features are accessible via intuitive buttons and menus integrated into the SillyTavern UI.
+This extension brings the full power of the original "Guided Generations" Quick Reply set to SillyTavern as a native extension. It provides modular, context-aware tools for shaping, refining, and guiding AI-generated content.
+
+**This fork includes additional features** such as Simple Send: Character and Edit Description tools for enhanced character customization.
 
 See [`JSDoc.md`](./JSDoc.md) for code-level documentation.
 
@@ -12,6 +14,7 @@ See [`JSDoc.md`](./JSDoc.md) for code-level documentation.
 
 ## Table of Contents
 - [Features](#features)
+- [New Features (Fork)](#new-features-fork)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Settings](#settings)
@@ -67,7 +70,7 @@ See [`JSDoc.md`](./JSDoc.md) for code-level documentation.
 ### 🔖 Tools Menu
 *Access additional utilities*
   - **🔧 Corrections:** Edit the last AI message with targeted instructions.
-  - **🧩 Separated Thinking:** Analyze the currently shown AI message against the full chat and generate a corrected version as a new swipe. Can also run automatically after normal replies and swipe generations.
+  - **🧩 Separated Thinking:** Analyze the currently shown AI message against the full chat and generate a corrected version as a new swipe. Can also run automatically after normal replies and swipes.
   - **✅ Spellchecker:** Polish your input for grammar, punctuation, and flow.
   - **✈️ Simple Send:** Send input as a user message without triggering a model response.
   - **🖋️ Edit Intros:** Rewrite or transform introductory messages on demand.
@@ -75,11 +78,52 @@ See [`JSDoc.md`](./JSDoc.md) for code-level documentation.
 
 ---
 
+## New Features (Fork)
+
+### 👤 **Simple Send: Character** *(NEW)*
+*Send messages directly as the character without triggering an AI response.*
+- Click the **Simple Send: Character** button (or access via Tools Menu).
+- Your input is sent to the chat as the character's message.
+- Useful for:
+  - Adding character actions and narration without AI interruption
+  - Creating roleplay beats and scene-setting
+  - Maintaining full control over character interactions
+- Icon: 👤 (ninja user)
+
+### 📝 **Edit Description** *(NEW)*
+*Generate, create, or edit character descriptions with AI assistance.*
+
+**Three Operation Modes:**
+  1. **Edit Existing** - Refine the current character description
+     - View a detailed diff showing what changed
+     - Accept or revert changes before saving
+     - Preserves your original description for comparison
+  
+  2. **Create New** - Generate a brand new character description from instructions
+     - Perfect for building new characters from scratch
+     - Supports custom format fields (optional)
+     - Replace or customize the entire description at once
+  
+  3. **Create World** - Generate world/setting descriptions
+     - Build immersive world context
+     - Define locations, atmospheres, and environmental details
+
+**Features:**
+  - 🔄 **Format Templates**: Define reusable format structures (e.g., "Name: ", "Personality: ", etc.)
+  - 🔍 **Diff View**: Visual comparison of changes (green for added, red for removed text)
+  - 📖 **Guidebook**: Integrated help explaining how to use the tool
+  - 🎛️ **Popup UI**: Clean, organized interface within a modal dialog
+
+- Icon: 📇 (address card)
+- Access via **Tools Menu** → **Edit Description** or dedicated button
+
+---
+
 ## Installation
 
 1. **Install the Extension:**
-   - In the Extensionmanager click on Install Extension and enter https://github.com/Samueras/GuidedGenerations-Extension/ as the GITHUB
-
+   - In the Extension Manager, click on Install Extension and enter https://github.com/Tungnamh9231/GuidedGenerations-Extension/ as the GITHUB URL
+   - Or clone this fork directly for development
 
 ---
 
@@ -90,11 +134,15 @@ See [`JSDoc.md`](./JSDoc.md) for code-level documentation.
 - See in-app settings for feature toggles and auto-guide configuration.
 - For full technical details, see [`JSDoc.md`](./JSDoc.md).
 
+**New Features Usage:**
+- **Simple Send: Character** - Look for the 👤 ninja icon button, or find it in Tools Menu under "Simple Send: Character"
+- **Edit Description** - Look for the 📇 button, or find it in Tools Menu under "Edit Description"
+
 ---
 
 ## ⚙️ Settings
 
-All extension settings are managed via SillyTavern’s Extension Settings panel:
+All extension settings are managed via SillyTavern's Extension Settings panel:
 
 - **Auto-Trigger**: toggle automatic execution of:
   - Thinking Guide
@@ -110,17 +158,22 @@ All extension settings are managed via SillyTavern’s Extension Settings panel:
   - Guided Response (🐕)
   - Guided Swipe (👈)
   - Persistent Guides Menu (📖)
-  - Optional tool buttons such as Corrections, Spellchecker, Edit Intros, and Separated Thinking.
+  - Simple Send (✈️)
+  - **Simple Send: Character (👤)** *(NEW)*
+  - Recover Input (↩️)
+  - Edit Intros (🖋️)
+  - **Edit Description (📇)** *(NEW)*
+  - Optional tool buttons such as Corrections, Spellchecker, and Separated Thinking.
 
 - **Injection Role**: select the role (`system`, `assistant`, or `user`) used when injecting instructions.
 
 - **Debug Mode**: when enabled, shows detailed debug information in the browser console. Useful for troubleshooting but can clutter the console during normal use.
 
-- **Presets & Profiles**: for each guide/tool (Clothes, State, Thinking, Situational, Rules, Custom, Corrections, Separated Thinking, Spellchecker, Edit Intros, Fun Prompts, Impersonation 1st/2nd/3rd, and the Stat Tracker's two calls), pick an API connection profile and a preset baseline. The extension builds the request from your selected profile/preset directly (it no longer globally switches your active profile during a guide run), so each tool can use a different model without disrupting your main chat connection.
+- **Presets & Profiles**: for each guide/tool (Clothes, State, Thinking, Situational, Rules, Custom, Corrections, Separated Thinking, Spellchecker, Edit Intros, **Edit Description** *(NEW)*, Impersonation 1st/2nd/3rd), you can select a preset or profile.
 
-  **GG Internal Helper Preset** is available (and set as the default) for the guides and tools that benefit from a helper-oriented prompt stack — Clothes, State, Thinking, Situational, Rules, Custom, Custom Auto, Corrections, Separated Thinking, Spellchecker, and both Stat Tracker calls. It keeps your current profile's model/context/temperature settings but swaps in a focused helper prompt layout and a configurable Max Response Tokens value (set in the same section). Choose **None** for any of them if you'd rather use your active preset as-is. The internal helper preset is intentionally hidden for Impersonation, Edit Intros, and Fun Prompts, since those need your full chat/character context.
+  **GG Internal Helper Preset** is available (and set as the default) for the guides and tools that benefit from a helper-oriented prompt stack — Clothes, State, Thinking, Situational, Rules, Corrections, Separated Thinking, Spellchecker, Edit Intros, and **Edit Description** *(NEW)*.
 
-- **Prompt Files and Overrides**: default prompt templates are stored in [`prompts.json`](./prompts.json), so they can be edited outside SillyTavern. By default the extension reads from `prompts.json`. Each prompt in Extension Settings has a **Use prompts.json** checkbox — checked (default) means the file is the source, unchecked means your own saved prompt is used instead. Editing a prompt in settings unchecks that box automatically so your edit takes effect. The settings panel also includes a button to download the default `prompts.json` from GitHub.
+- **Prompt Files and Overrides**: default prompt templates are stored in [`prompts.json`](./prompts.json), so they can be edited outside SillyTavern. By default the extension reads from `prompts.json` but can be set to load from an external URL in settings.
 
   Use `{{input}}` for your input text and other placeholders as supported. Prompt coverage includes:
   - Clothes Guide Prompt
@@ -136,8 +189,12 @@ All extension settings are managed via SillyTavern’s Extension Settings panel:
   - Guided Response Prompt
   - Guided Swipe Prompt
   - Custom Auto Guide Prompt
-  - Edit Intros option and wrapper prompts
-  - Persistent guide injection wrappers and tracker default prompts
+  - Edit Intros Prompts
+  - **Edit Description Prompts** *(NEW)*
+    - Edit Existing
+    - Create New
+    - Create New with Format
+    - Create World
 
 ---
 
@@ -145,6 +202,7 @@ All extension settings are managed via SillyTavern’s Extension Settings panel:
 
 - **Missing Buttons:** Ensure SillyTavern is up to date (v1.12.9+) and LALib is installed/enabled.
 - **Context Menus Not Appearing:** Try switching chats or re-adding the extension in the Quick Replies menu.
+- **Edit Description Not Working:** Make sure the character has a description textarea available in the character editor.
 - **Other Issues:** Restart SillyTavern, check for updates, and consult the [SillyTavern documentation](https://github.com/SillyTavern/SillyTavern).
 
 ---

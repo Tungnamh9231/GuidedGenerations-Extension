@@ -55,6 +55,12 @@
                 </div>
                 <div class="setting_item">
                     <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="gg_showSimpleSendCharacterButton" name="showSimpleSendCharacterButton" class="gg-setting-input">
+                        <label for="gg_showSimpleSendCharacterButton" style="margin-left: 8px;">Show Simple Send: Character Button</label>
+                    </div>
+                </div>
+                <div class="setting_item">
+                    <div style="display: flex; align-items: center; margin-bottom: 5px;">
                         <input type="checkbox" id="gg_showRecoverInputButton" name="showRecoverInputButton" class="gg-setting-input">
                         <label for="gg_showRecoverInputButton" style="margin-left: 8px;">Show Recover Input Button</label>
                     </div>
@@ -63,6 +69,12 @@
                     <div style="display: flex; align-items: center; margin-bottom: 5px;">
                         <input type="checkbox" id="gg_showEditIntrosButton" name="showEditIntrosButton" class="gg-setting-input">
                         <label for="gg_showEditIntrosButton" style="margin-left: 8px;">Show Edit Intros Button</label>
+                    </div>
+                </div>
+                <div class="setting_item">
+                    <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="gg_showEditDescriptionButton" name="showEditDescriptionButton" class="gg-setting-input">
+                        <label for="gg_showEditDescriptionButton" style="margin-left: 8px;">Show Edit Description Button</label>
                     </div>
                 </div>
                 <div class="setting_item">
@@ -389,6 +401,20 @@
                         </div>
                     </div>
 
+                    <!-- Edit Description -->
+                    <div style="display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <div style="flex: 0 0 160px; min-width: 0;">Edit Description</div>
+                        <div style="flex: 1 1 0; min-width: 0;">
+                            <select id="profileEditDescription" name="profileEditDescription" class="gg-setting-input text_pole select_compact" style="width: 100%; min-width: 0;">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                        <div style="flex: 1 1 0; min-width: 0;">
+                            <select id="presetEditDescription" name="presetEditDescription" class="gg-setting-input text_pole select_compact" style="width: 100%; min-width: 0;">
+                            </select>
+                        </div>
+                    </div>
+
                     <!-- Impersonate 1st -->
                     <div style="display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: 8px;">
                         <div style="flex: 0 0 160px; min-width: 0;">Impersonate 1st</div>
@@ -479,14 +505,13 @@
                     <summary>
                         <h4>Guide Prompt Overrides</h4>
                         <small class="setting_item_description">By default prompts are loaded from <code>prompts.json</code> in the extension folder. Each prompt has a "Use prompts.json" checkbox — checked (default) means the file is the source, unchecked means your own saved value is used instead. Editing a prompt here unchecks that box automatically so your edit takes effect. Changes made here are saved in SillyTavern user settings and do not rewrite <code>prompts.json</code>. Use <code>&#123;&#123;input&#125;&#125;</code> where you want the original user text to be inserted (if applicable). Raw and Depth controls are still saved here.</small>
-                        <button type="button" id="ggDownloadDefaultPrompts" class="menu_button" style="margin-top: 8px;">Download default prompts.json from GitHub</button>
+                        <button type="button" id="ggDownloadDefaultPrompts" class="menu_button interactable" style="margin-top: 8px; padding: 6px 12px; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--SmartThemeBorderColor); border-radius: 5px; color: var(--SmartThemeBodyColor); cursor: pointer;">Download default prompts.json from GitHub</button>
                     </summary>
                     <!-- Textareas for overriding default guide prompts -->
                     <div class="setting_item">
                         <label for="gg_promptClothes" style="margin-left: 8px; min-width:150px; display:block;">Clothes Guide Prompt</label>
                         <textarea id="gg_promptClothes" name="promptClothes" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptClothes" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptClothes" name="rawPromptClothes" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptClothes" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptClothes" style="margin-left:8px;">Depth:</label>
@@ -497,7 +522,6 @@
                         <label for="gg_promptState" style="margin-left: 8px; min-width:150px; display:block;">State Guide Prompt</label>
                         <textarea id="gg_promptState" name="promptState" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptState" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptState" name="rawPromptState" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptState" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptState" style="margin-left:8px;">Depth:</label>
@@ -508,7 +532,6 @@
                         <label for="gg_promptThinking" style="margin-left: 8px; min-width:150px; display:block;">Thinking Guide Prompt</label>
                         <textarea id="gg_promptThinking" name="promptThinking" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptThinking" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptThinking" name="rawPromptThinking" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptThinking" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptThinking" style="margin-left:8px;">Depth:</label>
@@ -519,7 +542,6 @@
                         <label for="gg_customAutoGuidePrompt" style="margin-left: 8px; min-width:150px; display:block;">Custom Auto Guide Prompt</label>
                         <textarea id="gg_customAutoGuidePrompt" name="customAutoGuidePrompt" class="gg-setting-input text_pole" rows="3" placeholder="Enter custom prompt here... (leave empty to disable override)" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="customAutoGuidePrompt" style="margin-top:4px;">Default (Empty)</button>
                             <input type="checkbox" id="gg_rawPromptCustomAuto" name="rawPromptCustomAuto" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptCustomAuto" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptCustomAuto" style="margin-left:8px;">Depth:</label>
@@ -530,7 +552,6 @@
                         <label for="gg_promptSituational" style="margin-left: 8px; min-width:150px; display:block;">Situational Guide Prompt</label>
                         <textarea id="gg_promptSituational" name="promptSituational" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptSituational" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptSituational" name="rawPromptSituational" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptSituational" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptSituational" style="margin-left:8px;">Depth:</label>
@@ -541,7 +562,6 @@
                         <label for="gg_promptRules" style="margin-left: 8px; min-width:150px; display:block;">Rules Guide Prompt</label>
                         <textarea id="gg_promptRules" name="promptRules" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptRules" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptRules" name="rawPromptRules" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptRules" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptRules" style="margin-left:8px;">Depth:</label>
@@ -552,7 +572,6 @@
                         <label for="gg_promptCorrections" style="margin-left: 8px; min-width:150px; display:block;">Corrections Prompt</label>
                         <textarea id="gg_promptCorrections" name="promptCorrections" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptCorrections" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptCorrections" name="rawPromptCorrections" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptCorrections" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptCorrections" style="margin-left:8px;">Depth:</label>
@@ -563,7 +582,6 @@
                         <label for="gg_promptSeparatedThinking" style="margin-left: 8px; min-width:150px; display:block;">Separated Thinking Prompt</label>
                         <textarea id="gg_promptSeparatedThinking" name="promptSeparatedThinking" class="gg-setting-input text_pole" rows="5" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptSeparatedThinking" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptSeparatedThinking" name="rawPromptSeparatedThinking" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptSeparatedThinking" style="margin-left:4px;">Raw</label>
                             <label for="gg_depthPromptSeparatedThinking" style="margin-left:8px;">Depth:</label>
@@ -574,7 +592,6 @@
                         <label for="gg_promptSpellchecker" style="margin-left: 8px; min-width:150px; display:block;">Spellchecker Prompt</label>
                         <textarea id="gg_promptSpellchecker" name="promptSpellchecker" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
                         <div style="display: flex; align-items: center; margin-top: 4px;">
-                            <button type="button" class="gg-default-button" data-target="promptSpellchecker" style="margin-top:4px;">Default</button>
                             <input type="checkbox" id="gg_rawPromptSpellchecker" name="rawPromptSpellchecker" class="gg-setting-input" style="margin-left:8px;">
                             <label for="gg_rawPromptSpellchecker" style="margin-left:4px;">Raw</label>
                         </div>
@@ -582,34 +599,28 @@
                     <div class="setting_item">
                         <label for="gg_promptImpersonate1st" style="margin-left: 8px; min-width:150px; display:block;">Impersonate 1st Person Prompt</label>
                         <textarea id="gg_promptImpersonate1st" name="promptImpersonate1st" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
-                        <button type="button" class="gg-default-button" data-target="promptImpersonate1st" style="margin-top:4px;">Default</button>
                     </div>
                     <div class="setting_item">
                         <label for="gg_promptImpersonate2nd" style="margin-left: 8px; min-width:150px; display:block;">Impersonate 2nd Person Prompt</label>
                         <textarea id="gg_promptImpersonate2nd" name="promptImpersonate2nd" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
-                        <button type="button" class="gg-default-button" data-target="promptImpersonate2nd" style="margin-top:4px;">Default</button>
                     </div>
                     <div class="setting_item">
                         <label for="gg_promptImpersonate3rd" style="margin-left: 8px; min-width:150px; display:block;">Impersonate 3rd Person Prompt</label>
                         <textarea id="gg_promptImpersonate3rd" name="promptImpersonate3rd" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
-                        <button type="button" class="gg-default-button" data-target="promptImpersonate3rd" style="margin-top:4px;">Default</button>
                     </div>
                     <div class="setting_item">
                         <label for="gg_promptGuidedContinue" style="margin-left: 8px; min-width:150px; display:block;">Guided Continue Prompt</label>
                         <textarea id="gg_promptGuidedContinue" name="promptGuidedContinue" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
-                        <button type="button" class="gg-default-button" data-target="promptGuidedContinue" style="margin-top:4px;">Default</button>
                     </div>
                     <div class="setting_item">
                         <label for="gg_promptGuidedResponse" style="margin-left: 8px; min-width:150px; display:block;">Guided Response Prompt</label>
                         <textarea id="gg_promptGuidedResponse" name="promptGuidedResponse" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
-                        <button type="button" class="gg-default-button" data-target="promptGuidedResponse" style="margin-top:4px;">Default</button>
                             <label for="gg_depthPromptGuidedResponse" style="margin-left:8px;">Depth:</label>
                             <input type="number" id="gg_depthPromptGuidedResponse" name="depthPromptGuidedResponse" class="gg-setting-input" min="0" style="width: 50px; margin-left:4px;">
                     </div>
                     <div class="setting_item">
                         <label for="gg_promptGuidedSwipe" style="margin-left: 8px; min-width:150px; display:block;">Guided Swipe Prompt</label>
                         <textarea id="gg_promptGuidedSwipe" name="promptGuidedSwipe" class="gg-setting-input text_pole" rows="3" style="width:100%; margin-left:8px; min-width:200px;"></textarea>
-                        <button type="button" class="gg-default-button" data-target="promptGuidedSwipe" style="margin-top:4px;">Default</button>
                             <label for="gg_depthPromptGuidedSwipe" style="margin-left:8px;">Depth:</label>
                             <input type="number" id="gg_depthPromptGuidedSwipe" name="depthPromptGuidedSwipe" class="gg-setting-input" min="0" style="width: 50px; margin-left:4px;">
                     </div>

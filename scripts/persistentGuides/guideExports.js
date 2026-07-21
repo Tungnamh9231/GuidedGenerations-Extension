@@ -5,7 +5,7 @@
 
 // External dependencies (SillyTavern)
 import { getContext, extension_settings, renderExtensionTemplateAsync, getExtensionManifest } from '../../../../../extensions.js';
-import { chat, eventSource, event_types, saveChatConditional, addOneMessage, deactivateSendButtons, activateSendButtons, setExternalAbortController, setSendButtonState } from '../../../../../../script.js';
+import { chat, eventSource, event_types, saveChatConditional, addOneMessage, deactivateSendButtons, activateSendButtons, setExternalAbortController, setSendButtonState, saveSettingsDebounced } from '../../../../../../script.js';
 
 // Core extension constants and functions (defined locally to avoid circular dependency)
 const extensionName = "GuidedGenerations-Extension";
@@ -119,6 +119,7 @@ const defaultSettings = {
     showSimpleSendButton: false,
     showRecoverInputButton: false,
     showEditIntrosButton: false,
+    showEditDescriptionButton: false,
     showCorrectionsButton: false,
     showSpellcheckerButton: false,
     showClearInputButton: false,
@@ -131,7 +132,7 @@ const defaultSettings = {
 
 // Utility functions
 import { getProfileApiType, getPresetsForApiType, getCurrentProfile, getProfileList, getConnectApiMap, extractApiIdFromApiType } from '../utils/presetUtils.js';
-import { requestCompletion, shouldUseDirectCall } from '../utils/llmClient.js';
+import { requestCompletion, shouldUseDirectCall, buildChatMessagesWithPromptManager } from '../utils/llmClient.js';
 import { getPromptObject, getPromptValue, fillPromptTemplate, loadPromptCatalog } from '../utils/promptManager.js';
 import { pickGroupMember } from '../utils/groupSelection.js';
 
@@ -156,6 +157,7 @@ import { updateCharacter } from './updateCharacter.js';
 import { corrections } from '../tools/corrections.js';
 import { spellchecker } from '../tools/spellchecker.js';
 import editIntros from '../tools/editIntros.js';
+import editDescription from '../tools/editDescription.js';
 import clearInput from '../tools/clearInput.js';
 import separatedThinking from '../tools/separatedThinking.js';
 
@@ -192,6 +194,7 @@ export {
     setSendButtonState,
     renderExtensionTemplateAsync,
     getExtensionManifest,
+    saveSettingsDebounced,
     
     // Utility functions
     getProfileApiType,
@@ -206,6 +209,7 @@ export {
     getPromptValue,
     fillPromptTemplate,
     loadPromptCatalog,
+    buildChatMessagesWithPromptManager,
     pickGroupMember,
     
     // Guides
@@ -231,6 +235,7 @@ export {
     clearInput,
     corrections,
     editIntros,
+    editDescription,
     separatedThinking,
     spellchecker,
     

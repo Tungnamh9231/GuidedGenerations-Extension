@@ -1,165 +1,160 @@
 /**
- * Edit Intros Popup - Handles UI for editing character intros with various formatting options
+ * Edit Intros Popup - Handles UI for editing character intros using AI generation.
+ * Rewritten to use strict SillyTavern /gen command injection.
+ */
+/**
+ * Edit Intros Popup - Handles UI for editing character intros using AI generation.
+ * Rewritten to use strict SillyTavern /gen command injection.
  */
 
 import {
-    extensionName,
     getContext,
-    extension_settings,
     debugLog,
-    requestCompletion,
-    shouldUseDirectCall,
-    generateNewSwipe,
     activateSendButtons,
     setSendButtonState,
-    getPromptObject,
     getPromptValue,
-    fillPromptTemplate,
-} from '../persistentGuides/guideExports.js'; // Import from central hub
+    fillPromptTemplate
+} from '../persistentGuides/guideExports.js';
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
+import { PromptTabManager } from './promptTabManager.js';
 
-// Class to handle the popup functionality
 export class EditIntrosPopup {
     constructor() {
-        // Initialize state for multiple selections
-        this.selectedOptions = { 
-            perspective: [], 
-            tense: [], 
-            style: [], 
-            gender: [] 
-        };
-        this.isCustomSelected = false; // Track if custom option is active
         this.popupElement = null;
         this.initialized = false;
-        this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomCommand') || ''; // Load last command
-        // Track how many times applyChanges is called
-        this.applyChangesCount = 0;
+        this.lastCustomCommand = sessionStorage.getItem('gg_lastCustomCommand') || '';
     }
 
-    /**
-     * Initialize the popup
-     */
     async init() {
         if (this.initialized) return;
 
-        // Helper function to generate option HTML (to reduce repetition)
-        function generateOptionHtml(category, optionKey, title) {
-            return `<div class="gg-option" data-category="${category}" data-option="${optionKey}">
-                        <span class="gg-option-title">${title}</span>
-                    </div>`;
-        }
-
-        function generateSubOptionHtml(category, value, title) {
-            return `<div class="gg-suboption" data-category="${category}" data-value="${value}">${title}</div>`;
-        }
-
-        // Create popup container if it doesn't exist
         if (!document.getElementById('editIntrosPopup')) {
-            // Create the popup container
+            this.promptTabManager = new PromptTabManager('editIntros', [
+                { 
+                    key: 'editExisting', 
+                    label: 'Edit Existing', 
+                    variables: [
+                        { short: 'i', long: 'instruction', desc: 'User edit instruction' },
+                        { short: 'mtr', long: 'messageToRewrite', desc: 'Current greeting message' }
+                    ]
+                },
+                { 
+                    key: 'makeNew', 
+                    label: 'Create New', 
+                    variables: [
+                        { short: 'i', long: 'instruction', desc: 'User creation instruction' }
+                    ]
+                }
+            ]);
+            const promptTabHtml = this.promptTabManager.getHtml();
+
             const popupHtml = `
-                <div id="editIntrosPopup" class="gg-popup">
-                    <div class="gg-popup-content">
+                <div id="editIntrosPopup" class="gg-popup gg-editor-popup" role="dialog" aria-modal="true" aria-labelledby="gg-edit-intros-title" aria-hidden="true">
+                    <div class="gg-popup-content gg-editor-dialog gg-intro-editor-dialog">
                         <div class="gg-popup-header">
-                            <h2>Edit Intros</h2>
-                            <span class="gg-popup-close">&times;</span>
+                            <div class="gg-editor-title-group">
+                                <span class="gg-editor-title-icon" aria-hidden="true">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </span>
+                                <div>
+                                    <span class="gg-editor-eyebrow">AI writing assistant</span>
+                                    <h2 id="gg-edit-intros-title">Edit Intro</h2>
+                                    <p>Polish the current greeting or create a fresh opening.</p>
+                                </div>
+                            </div>
+                            <button type="button" class="gg-popup-close" aria-label="Close Edit Intro">
+                                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                            </button>
                         </div>
-                        <div class="gg-popup-body">
-                            <!-- Perspective Section -->
-                            <div class="gg-popup-section">
-                                <h3>Perspective</h3>
-                                <div class="gg-option-group">
-                                    <div class="gg-option" data-category="perspective" data-option="first-person"> <!-- Grouping Option -->
-                                        <span class="gg-option-title">First Person</span>
-                                        <div class="gg-suboptions">
-                                            ${generateSubOptionHtml('perspective', 'first-person-standard', 'I/me (standard 1st person)')}
-                                            ${generateSubOptionHtml('perspective', 'first-person-by-name', '{{user}} by name')}
-                                            ${generateSubOptionHtml('perspective', 'first-person-as-you', '{{user}} as you')}
-                                            ${generateSubOptionHtml('perspective', 'first-person-he-him', '{{user}} as he/him')}
-                                            ${generateSubOptionHtml('perspective', 'first-person-she-her', '{{user}} as she/her')}
-                                            ${generateSubOptionHtml('perspective', 'first-person-they-them', '{{user}} as they/them')}
-                                        </div>
+                        <div class="gg-popup-body gg-editor-body">
+                            <div class="gg-tabs" role="tablist" aria-label="Intro editor sections">
+                                <button type="button" id="gg-intros-tab-normal" class="gg-tab-btn active" data-tab="normal" role="tab" aria-selected="true" aria-controls="gg-tab-normal">
+                                    <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
+                                    <span>Write</span>
+                                </button>
+                                <button type="button" id="gg-intros-tab-prompts" class="gg-tab-btn" data-tab="prompts" role="tab" aria-selected="false" aria-controls="gg-tab-prompts">
+                                    <i class="fa-solid fa-terminal" aria-hidden="true"></i>
+                                    <span>Prompt</span>
+                                </button>
+                            </div>
+
+                            <div id="gg-tab-normal" class="gg-tab-content active" role="tabpanel" aria-labelledby="gg-intros-tab-normal">
+                                <section class="gg-popup-section gg-editor-card gg-editor-preview-card">
+                                <div class="gg-editor-section-heading">
+                                    <div>
+                                        <span class="gg-editor-section-label">Current greeting</span>
+                                        <p>The opening message that will be used by Rewrite.</p>
                                     </div>
-                                    <div class="gg-option" data-category="perspective" data-option="second-person"> <!-- Grouping Option -->
-                                        <span class="gg-option-title">Second Person</span>
-                                        <div class="gg-suboptions">
-                                            ${generateSubOptionHtml('perspective', 'second-person-as-you', '{{user}} as you')}
-                                        </div>
+                                    <span id="gg-current-intro-stats" class="gg-editor-meta">0 words</span>
+                                </div>
+                                <div id="gg-current-intro-display" class="gg-editor-current-text">
+                                    <span class="gg-current-desc-empty">No intro message available.</span>
+                                </div>
+                            </section>
+
+                            <section class="gg-popup-section gg-editor-card gg-custom-command-section">
+                                <div class="gg-editor-section-heading">
+                                    <div>
+                                        <label for="gg-custom-edit-command" class="gg-editor-section-label">What should change?</label>
+                                        <p>Describe tone, point of view, pacing, length, or any details to include.</p>
                                     </div>
-                                    <div class="gg-option" data-category="perspective" data-option="third-person"> <!-- Grouping Option -->
-                                        <span class="gg-option-title">Third Person</span>
-                                        <div class="gg-suboptions">
-                                            ${generateSubOptionHtml('perspective', 'third-person-by-name', '{{user}} by name and pronouns')}
-                                        </div>
+                                    <span class="gg-editor-required">Required</span>
+                                </div>
+                                <textarea id="gg-custom-edit-command" class="text_pole gg-editor-textarea" rows="6" placeholder="Example: Make the opening more atmospheric, keep it in third person, and end with a clear invitation for {{user}} to respond."></textarea>
+                                <div class="gg-editor-field-footer">
+                                    <div class="gg-editor-suggestions" aria-label="Quick instruction suggestions">
+                                        <button type="button" class="gg-suggestion-chip" data-instruction="Make the intro more immersive and atmospheric.">More immersive</button>
+                                        <button type="button" class="gg-suggestion-chip" data-instruction="Make the opening shorter and more direct.">Shorter opening</button>
+                                        <button type="button" class="gg-suggestion-chip" data-instruction="Rewrite the intro in first-person point of view.">First-person POV</button>
                                     </div>
+                                    <span id="gg-intro-instruction-count" class="gg-editor-meta">0 characters</span>
                                 </div>
+                                <p id="gg-intro-instruction-error" class="gg-editor-error" role="alert" hidden>Please enter an instruction.</p>
+                            </section>
                             </div>
 
-                            <!-- Tense Section -->
-                            <div class="gg-popup-section">
-                                <h3>Tense</h3>
-                                <div class="gg-option-group">
-                                    ${generateOptionHtml('tense', 'past-tense', 'Past Tense')}
-                                    ${generateOptionHtml('tense', 'present-tense', 'Present Tense')}
-                                </div>
-                            </div>
-
-                            <!-- Style Section -->
-                            <div class="gg-popup-section">
-                                <h3>Style</h3>
-                                <div class="gg-option-group">
-                                    ${generateOptionHtml('style', 'novella-style', 'Novella Style')}
-                                    ${generateOptionHtml('style', 'internet-rp-style', 'Internet RP Style')}
-                                    ${generateOptionHtml('style', 'literary-style', 'Literary Style')}
-                                    ${generateOptionHtml('style', 'script-style', 'Script Style')}
-                                </div>
-                            </div>
-
-                            <!-- Gender Section -->
-                            <div class="gg-popup-section">
-                                <h3>Gender (for {{user}})</h3>
-                                <div class="gg-option-group">
-                                    ${generateOptionHtml('gender', 'he-him', 'He/Him')}
-                                    ${generateOptionHtml('gender', 'she-her', 'She/Her')}
-                                    ${generateOptionHtml('gender', 'they-them', 'They/Them')}
-                                </div>
-                            </div>
-
-                            <!-- Custom Command Section -->
-                            <div class="gg-popup-section gg-custom-command-section">
-                                <h3>Custom</h3>
-                                <div class="gg-option gg-custom-option" data-category="custom" data-option="custom"> <!-- Added category -->
-                                    <span class="gg-option-title">Use Custom Instruction Below</span>
-                                </div>
-                                <textarea id="gg-custom-edit-command" placeholder="Enter custom rewrite instruction here...">${this.lastCustomCommand}</textarea>
+                            <div id="gg-tab-prompts" class="gg-tab-content" role="tabpanel" aria-labelledby="gg-intros-tab-prompts" hidden>
+                                ${promptTabHtml}
                             </div>
                         </div>
-                        <div class="gg-popup-footer">
-                            <button id="ggCancelEditIntros" class="gg-button gg-button-secondary">Cancel</button>
-                            <button id="ggMakeNewIntro" class="gg-button gg-button-primary">Make New Intro</button>
-                            <button id="ggApplyEditIntros" class="gg-button gg-button-primary">Edit Intro</button>
+                        <div class="gg-popup-footer-wrap gg-editor-footer-wrap">
+                            <div class="gg-editor-footer-note">
+                                <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+                                <span>Rewrite preserves the current greeting; New Intro starts from your instruction.</span>
+                            </div>
+                            <div class="gg-popup-footer">
+                                <button type="button" id="ggCancelEditIntros" class="gg-button gg-button-quiet">Cancel</button>
+                                <button type="button" id="ggMakeNewIntro" class="gg-button gg-button-secondary gg-editor-action-button">
+                                    <i class="fa-regular fa-file" aria-hidden="true"></i>
+                                    <span>New Intro</span>
+                                </button>
+                                <button type="button" id="ggApplyEditIntros" class="gg-button gg-button-primary gg-editor-action-button">
+                                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                    <span>Rewrite Current</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
             `;
-
-            // Append to body
             const popupContainer = document.createElement('div');
             popupContainer.innerHTML = popupHtml;
             document.body.appendChild(popupContainer.firstElementChild);
         }
 
-        // Get the popup element reference
         this.popupElement = document.getElementById('editIntrosPopup');
-
-        // Setup event listeners
+        const commandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
+        if (commandTextarea) {
+            commandTextarea.value = this.lastCustomCommand;
+            this._updateInstructionCount();
+        }
         this.setupEventListeners();
-
+        if (this.promptTabManager) {
+            this.promptTabManager.setupEventListeners(this.popupElement);
+        }
         this.initialized = true;
     }
 
-    /**
-     * Setup event listeners for the popup elements
-     */
     setupEventListeners() {
         if (!this.popupElement) return;
 
@@ -167,471 +162,328 @@ export class EditIntrosPopup {
         const cancelButton = this.popupElement.querySelector('#ggCancelEditIntros');
         const applyButton = this.popupElement.querySelector('#ggApplyEditIntros');
         const makeNewIntroButton = this.popupElement.querySelector('#ggMakeNewIntro');
-        const options = this.popupElement.querySelectorAll('.gg-option:not(.gg-custom-option)'); // Exclude custom
-        const suboptions = this.popupElement.querySelectorAll('.gg-suboption');
-        const customOption = this.popupElement.querySelector('.gg-custom-option');
-        const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
 
-        // Close/Cancel Actions
         closeButton.addEventListener('click', () => this.close());
         cancelButton.addEventListener('click', () => this.close());
-
-        // Apply/Make New Actions
         applyButton.addEventListener('click', () => this.applyChanges());
         makeNewIntroButton.addEventListener('click', () => this.makeNewIntro());
 
-        // --- Category Option/Suboption Click Logic ---
-        const handleCategorySelection = (element) => {
-            const category = element.dataset.category;
-            const value = element.dataset.value || element.dataset.option; // Use data-value for suboptions, data-option for options
-
-            const selected = element.classList.toggle('selected');
-            const selectedValues = Array.isArray(this.selectedOptions[category])
-                ? [...this.selectedOptions[category]]
-                : this.selectedOptions[category]
-                    ? [this.selectedOptions[category]]
-                    : [];
-
-            if (element.classList.contains('gg-suboption')) {
-                const parentOption = element.closest('.gg-option');
-                const hasSelectedSuboption = !!parentOption?.querySelector('.gg-suboption.selected');
-                parentOption?.classList.toggle('selected', hasSelectedSuboption);
+        const commandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
+        commandTextarea?.addEventListener('input', () => {
+            this._updateInstructionCount();
+            this._setInstructionError(false);
+        });
+        commandTextarea?.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                if (!applyButton.disabled) this.applyChanges();
             }
-
-            if (selected) {
-                if (!selectedValues.includes(value)) {
-                    selectedValues.push(value);
-                }
-            } else {
-                const existingIndex = selectedValues.indexOf(value);
-                if (existingIndex !== -1) {
-                    selectedValues.splice(existingIndex, 1);
-                }
-            }
-
-            this.selectedOptions[category] = selectedValues;
-        };
-
-        options.forEach(option => {
-            // Handle clicks on main options that DON'T have suboptions
-            if (!option.querySelector('.gg-suboptions')) {
-                option.addEventListener('click', (event) => {
-                    // Prevent triggering if click was on the suboptions container itself
-                    if (event.target.closest('.gg-suboptions')) return; 
-                    handleCategorySelection(option);
-                 });
-            }
-            // We don't need listeners on parent options with suboptions, only the suboptions themselves
         });
 
-        suboptions.forEach(suboption => {
-            suboption.addEventListener('click', () => {
-                handleCategorySelection(suboption);
+        this.popupElement.querySelectorAll('.gg-suggestion-chip').forEach((chip) => {
+            chip.addEventListener('click', () => {
+                if (!commandTextarea) return;
+                const suggestion = chip.dataset.instruction || '';
+                const currentValue = commandTextarea.value.trim();
+                commandTextarea.value = currentValue ? `${currentValue}\n${suggestion}` : suggestion;
+                commandTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+                commandTextarea.focus();
             });
         });
 
-        // --- Custom Option Click Logic ---
-        customOption.addEventListener('click', () => {
-            this.isCustomSelected = !this.isCustomSelected;
-            customOption.classList.toggle('selected', this.isCustomSelected);
+        this.popupElement.addEventListener('click', (event) => {
+            if (event.target === this.popupElement) this.close();
         });
 
-        // --- Custom Textarea Input Logic ---
-        customCommandTextarea.addEventListener('input', () => {
-             // Automatically enable custom instructions if user types.
-            if (!this.isCustomSelected && customCommandTextarea.value.trim() !== '') {
-                this.isCustomSelected = true;
-                customOption.classList.add('selected');
+        // Tabs
+        const tabBtns = this.popupElement.querySelectorAll('.gg-tab-btn');
+        const tabContents = this.popupElement.querySelectorAll('.gg-tab-content');
+        const footerWrap = this.popupElement.querySelector('.gg-popup-footer-wrap');
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const selectedButton = e.currentTarget;
+                const targetTab = selectedButton.getAttribute('data-tab');
+
+                // Update buttons
+                tabBtns.forEach(b => {
+                    b.classList.remove('active');
+                    b.setAttribute('aria-selected', 'false');
+                });
+                selectedButton.classList.add('active');
+                selectedButton.setAttribute('aria-selected', 'true');
+
+                // Update contents
+                tabContents.forEach(content => {
+                    const isActive = content.id === `gg-tab-${targetTab}`;
+                    content.hidden = !isActive;
+                    content.classList.toggle('active', isActive);
+                });
+
+                // Toggle footer
+                if (footerWrap) {
+                    footerWrap.hidden = targetTab === 'prompts';
+                }
+            });
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && this.popupElement?.getAttribute('aria-hidden') === 'false') {
+                this.close();
             }
         });
     }
 
-    async getSelectedInstructions() {
-        const optionPrompts = await getPromptObject('editIntros.options', {});
-        const selectedKeys = Object.values(this.selectedOptions).flatMap(value => {
-            if (Array.isArray(value)) {
-                return value;
-            }
-            return value ? [value] : [];
-        });
-
-        return selectedKeys
-            .map(key => optionPrompts[key])
-            .filter(Boolean);
-    }
-
-    deselectAllPresets() {
-        this.popupElement.querySelectorAll('.gg-option:not(.gg-custom-option), .gg-suboption').forEach(el => {
-            el.classList.remove('selected');
-        });
-        this.popupElement.querySelector('.gg-custom-option')?.classList.remove('selected');
-        Object.keys(this.selectedOptions).forEach(key => {
-            this.selectedOptions[key] = [];
-        });
-        this.isCustomSelected = false;
-    }
-
-    restoreSelectionState() {
-        const customOption = this.popupElement.querySelector('.gg-custom-option');
-        Object.values(this.selectedOptions).flatMap(value => Array.isArray(value) ? value : [value]).forEach(selectedKey => {
-            if (!selectedKey) return;
-            const selectedElement = this.popupElement.querySelector(`[data-option="${selectedKey}"], [data-value="${selectedKey}"]`);
-            selectedElement?.classList.add('selected');
-            selectedElement?.closest('.gg-option')?.classList.add('selected');
-        });
-        customOption?.classList.toggle('selected', this.isCustomSelected);
-    }
-
-    /**
-     * Resets the selection state both visually and in the internal state object,
-     * but preserves the custom command text.
-     */
-    _resetSelections() {
-        // Reset state variables
-        this.isCustomSelected = false;
-        Object.keys(this.selectedOptions).forEach(key => {
-            this.selectedOptions[key] = [];
-        });
-
-        // Reset visual state
-        this.popupElement.querySelectorAll('.gg-option.selected, .gg-suboption.selected').forEach(el => {
-            el.classList.remove('selected');
-        });
-        // Ensure custom is visually deselected too
-        this.popupElement.querySelector('.gg-custom-option')?.classList.remove('selected');
-        
-        // NOTE: We intentionally do NOT clear the custom command textarea here.
-    }
-
-    /**
-     * Open the popup
-     */
     open() {
         if (!this.initialized) {
             this.init().then(() => {
-                if (this.popupElement) {
-                    this.popupElement.style.display = 'block';
-                }
+                this._show();
             });
         } else if (this.popupElement) {
-            this.popupElement.style.display = 'block';
+            this._show();
         }
     }
 
-    /**
-     * Close the popup
-     */
     close() {
         if (this.popupElement) {
             this.popupElement.style.display = 'none';
+            this.popupElement.setAttribute('aria-hidden', 'true');
         }
-        // Reset selections when closing
-        this._resetSelections();
     }
 
-    /**
-     * Apply the selected changes
-     */
-    async applyChanges() {
-        // Increment and log invocation count
-        this.applyChangesCount++;
-        let instruction = '';
-        const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
-        const customCommand = customCommandTextarea.value.trim();
-        const selectedInstructions = await this.getSelectedInstructions();
-
-        // --- Build Instruction ---
-        if (this.isCustomSelected && customCommand) {
-            selectedInstructions.push(customCommand);
-            instruction = customCommand;
-            sessionStorage.setItem('gg_lastCustomCommand', customCommand);
-        }
-
-        if (selectedInstructions.length === 0) {
-             alert('Please select at least one category option and/or add custom instructions.');
-             return;
-        }
-        instruction = selectedInstructions.join('. ');
-
-        // Close the popup immediately now that validation has passed
-        this.close();
-
-        const textareaElement = document.getElementById('send_textarea');
-        const customEdit = textareaElement ? textareaElement.value.trim() : '';
-
-        const introPresetSettingKey = 'presetEditIntros';
-        const presetValue = extension_settings[extensionName]?.[introPresetSettingKey] ?? '';
-        const profileValue = extension_settings[extensionName]?.profileEditIntros ?? '';
-
-        try {
-            const context = getContext();
-            if (!context || !context.chat || context.chat.length === 0) {
-                console.error('[GuidedGenerations] No intro message available to edit.');
-                return;
-            }
-
-            const messageToRewrite = context.chat[0]?.mes || '';
-            const promptTemplate = await getPromptValue('editIntros.editExisting', '');
-            const promptForModel = fillPromptTemplate(promptTemplate, {
-                instruction,
-                messageToRewrite,
+    _show() {
+        if (!this.popupElement) return;
+        this._refreshIntroPreview();
+        this._updateInstructionCount();
+        this._setInstructionError(false);
+        this.popupElement.style.display = 'flex';
+        this.popupElement.setAttribute('aria-hidden', 'false');
+        const canAutoFocus = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
+        if (canAutoFocus) {
+            requestAnimationFrame(() => {
+                this.popupElement?.querySelector('#gg-custom-edit-command')?.focus({ preventScroll: true });
             });
-
-            const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
-            let updatedIntro = '';
-            if (useDirectCall) {
-                debugLog('[EditIntros] Requesting direct completion for intro edit...');
-                updatedIntro = await requestCompletion({
-                    profileName: profileValue,
-                    presetName: presetValue,
-                    prompt: promptForModel,
-                    debugLabel: 'editIntros:edit',
-                    includeChatHistory: false,
-                });
-            } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                const swipeHandled = await executeSwipeGenerationWithPrompt(context, promptForModel);
-                if (swipeHandled) {
-                    return;
-                }
-            } else {
-                console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
-            }
-
-            if (!updatedIntro || updatedIntro.trim() === '') {
-                console.error('[GuidedGenerations] No updated intro text received.');
-                return;
-            }
-
-            await applyIntroUpdate(context, updatedIntro);
-        } catch (error) {
-            console.error('[GuidedGenerations] Error executing Edit Intros request:', error);
-        }
-
-        if (customEdit && textareaElement) {
-            textareaElement.value = '';
         }
     }
 
-    /**
-     * Creates a new intro based on the selected option or custom instruction.
-     */
-    async makeNewIntro() {
-        let instruction = '';
+    _refreshIntroPreview() {
+        const display = this.popupElement?.querySelector('#gg-current-intro-display');
+        const stats = this.popupElement?.querySelector('#gg-current-intro-stats');
+        const rewriteButton = this.popupElement?.querySelector('#ggApplyEditIntros');
+        if (!display) return;
+
+        const context = getContext();
+        const introText = context?.chat?.[0]?.mes?.trim() || '';
+        if (introText) {
+            display.textContent = introText;
+            const wordCount = introText.split(/\s+/).filter(Boolean).length;
+            if (stats) stats.textContent = `${wordCount} ${wordCount === 1 ? 'word' : 'words'}`;
+            if (rewriteButton) {
+                rewriteButton.disabled = false;
+                rewriteButton.removeAttribute('title');
+            }
+        } else {
+            display.innerHTML = '<span class="gg-current-desc-empty">No intro message available.</span>';
+            if (stats) stats.textContent = '0 words';
+            if (rewriteButton) {
+                rewriteButton.disabled = true;
+                rewriteButton.title = 'There is no current intro to rewrite.';
+            }
+        }
+    }
+
+    _updateInstructionCount() {
+        const textarea = this.popupElement?.querySelector('#gg-custom-edit-command');
+        const counter = this.popupElement?.querySelector('#gg-intro-instruction-count');
+        if (textarea && counter) {
+            const count = textarea.value.length;
+            counter.textContent = `${count} ${count === 1 ? 'character' : 'characters'}`;
+        }
+    }
+
+    _setInstructionError(visible) {
+        const textarea = this.popupElement?.querySelector('#gg-custom-edit-command');
+        const error = this.popupElement?.querySelector('#gg-intro-instruction-error');
+        textarea?.classList.toggle('gg-editor-input-error', visible);
+        if (error) error.hidden = !visible;
+    }
+
+    async applyChanges() {
         const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
-        const customCommand = customCommandTextarea.value.trim();
-        const selectedInstructions = await this.getSelectedInstructions();
+        const instruction = customCommandTextarea.value.trim();
 
-        // --- Build Instruction (Same logic as applyChanges) ---
-        if (this.isCustomSelected && customCommand) {
-            selectedInstructions.push(customCommand);
-            instruction = customCommand;
-            sessionStorage.setItem('gg_lastCustomCommand', customCommand);
+        if (!instruction) {
+            this._setInstructionError(true);
+            customCommandTextarea.focus();
+            return;
         }
 
-        if (selectedInstructions.length === 0) {
-             alert('Please select at least one category option and/or add custom instructions.');
-             return;
-        }
-        instruction = selectedInstructions.join('. ');
-
-        // Close the popup immediately now that validation has passed
+        sessionStorage.setItem('gg_lastCustomCommand', instruction);
         this.close();
-
-        const introPresetSettingKey = 'presetEditIntros';
-        const presetValue = extension_settings[extensionName]?.[introPresetSettingKey] ?? '';
-        const profileValue = extension_settings[extensionName]?.profileEditIntros ?? '';
 
         try {
             const context = getContext();
             if (!context) {
-                console.error('[GuidedGenerations] Context unavailable for intro generation.');
+                console.error('[GuidedGenerations] Context unavailable.');
                 return;
             }
 
-            const promptTemplate = await getPromptValue('editIntros.makeNew', '');
-            const promptForModel = fillPromptTemplate(promptTemplate, { instruction });
-            const useDirectCall = await shouldUseDirectCall(profileValue, presetValue);
-            let newIntro = '';
-            if (useDirectCall) {
-                debugLog('[EditIntros] Requesting direct completion for new intro...');
-                newIntro = await requestCompletion({
-                    profileName: profileValue,
-                    presetName: presetValue,
-                    prompt: promptForModel,
-                    debugLabel: 'editIntros:new',
-                    includeChatHistory: false,
-                });
-            } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                const swipeHandled = await executeSwipeGenerationWithPrompt(context, promptForModel);
-                if (swipeHandled) {
-                    return;
-                }
+            const targetIndex = context?.chat?.length ? 0 : -1;
+            let messageToRewrite = '';
+            if (targetIndex !== -1 && context.chat[targetIndex]) {
+                messageToRewrite = context.chat[targetIndex].mes;
             } else {
-                console.error('[GuidedGenerations] context.executeSlashCommandsWithOptions not found!');
-            }
-
-            if (!newIntro || newIntro.trim() === '') {
-                console.error('[GuidedGenerations] No new intro text received.');
+                console.error('[GuidedGenerations] No intro message found to rewrite.');
+                alert('No intro message found to rewrite.');
                 return;
             }
 
-            await applyIntroUpdate(context, newIntro);
+            const template = await this.promptTabManager.getPrompt('editExisting');
+            const promptText = fillPromptTemplate(template, { instruction, messageToRewrite });
+
+            await this.executeGeneration(context, promptText);
+        } catch (error) {
+            console.error('[GuidedGenerations] Error executing Edit Intro request:', error);
+        }
+    }
+
+    async makeNewIntro() {
+        const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-command');
+        const instruction = customCommandTextarea.value.trim();
+
+        if (!instruction) {
+            this._setInstructionError(true);
+            customCommandTextarea.focus();
+            return;
+        }
+
+        sessionStorage.setItem('gg_lastCustomCommand', instruction);
+        this.close();
+
+        try {
+            const context = getContext();
+            if (!context) {
+                console.error('[GuidedGenerations] Context unavailable.');
+                return;
+            }
+
+            const template = await this.promptTabManager.getPrompt('makeNew');
+            const promptText = fillPromptTemplate(template, { instruction });
+            await this.executeGeneration(context, promptText);
         } catch (error) {
             console.error('[GuidedGenerations] Error executing Make New Intro request:', error);
         }
     }
 
-}
-
-async function applyIntroUpdate(context, introText) {
-    const targetIndex = context?.chat?.length ? 0 : -1;
-    const characterName = context?.characters?.[context.characterId]?.name || 'Assistant';
-
-    if (targetIndex === -1) {
-        const message = {
-            name: characterName,
-            is_user: false,
-            is_system: false,
-            send_date: Date.now(),
-            mes: introText,
-            force_avatar: null,
-            extra: {
-                type: 'intro',
-                gen_id: Date.now(),
-            },
-        };
-        context.chat.push(message);
-        await context.eventSource.emit('MESSAGE_SENT', context.chat.length - 1);
-        if (typeof context.addOneMessage === 'function') {
-            await context.addOneMessage(message);
+    async executeGeneration(context, promptText) {
+        const originalChat = [...(context.chat || [])];
+        
+        // Isolate chat context
+        if (context.chat) {
+            context.chat.length = 0;
+            context.chat.push({
+                name: 'User',
+                is_user: true,
+                is_system: false,
+                send_date: Date.now(),
+                mes: promptText,
+                extra: { type: 'temp_intro_gen' }
+            });
         }
-        await context.eventSource.emit('USER_MESSAGE_RENDERED', context.chat.length - 1);
-        if (typeof context.saveChat === 'function') {
-            await context.saveChat();
+
+        setSendButtonState?.(true);
+        try {
+            activateSendButtons?.();
+            const $sendButton = $('#send_but');
+            if ($sendButton.length) {
+                $sendButton.removeClass('fa-paper-plane').addClass('fa-stop-circle');
+            }
+        } catch (e) {
+            /* ignore */
         }
-        return;
+
+        let generatedIntro = '';
+        try {
+            debugLog('[EditIntros] Using /gen with injected prompt at end of chat...');
+            const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
+                showOutput: false,
+                handleExecutionErrors: true,
+            });
+            generatedIntro = genResult?.pipe || '';
+        } catch (genError) {
+            console.error('[GuidedGenerations] Intro generation failed:', genError);
+        } finally {
+            if (context.chat) {
+                context.chat.length = 0;
+                context.chat.push(...originalChat);
+                if (typeof context.saveChat === 'function') await context.saveChat();
+                if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
+            }
+        }
+
+        // Resync UI buttons
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        try {
+            activateSendButtons?.();
+            setSendButtonState?.(false);
+            const $sendButton = $('#send_but');
+            if ($sendButton.length) {
+                $sendButton.removeClass('fa-stop-circle').addClass('fa-paper-plane');
+            }
+        } catch (e) {
+            /* ignore */
+        }
+
+        if (!generatedIntro || generatedIntro.trim() === '') {
+            console.error('[GuidedGenerations] No generated intro text received.');
+            return;
+        }
+
+        await this.applyIntroUpdate(context, generatedIntro);
     }
 
-    const messageData = context.chat[targetIndex];
-    if (!messageData) {
-        console.error('[GuidedGenerations] Could not find intro message to update.');
-        return;
-    }
+    async applyIntroUpdate(context, introText) {
+        const targetIndex = context?.chat?.length ? 0 : -1;
+        const characterName = context?.characters?.[context.characterId]?.name || 'Assistant';
+        if (targetIndex === -1) {
+            const message = {
+                name: characterName,
+                is_user: false,
+                is_system: false,
+                send_date: Date.now(),
+                mes: introText,
+                force_avatar: null,
+                extra: {
+                    type: 'intro',
+                    gen_id: Date.now(),
+                },
+            };
+            if (context.chat) {
+                context.chat.push(message);
+            }
+            await context.eventSource.emit('MESSAGE_SENT', context.chat.length - 1);
+            if (typeof context.addOneMessage === 'function') {
+                await context.addOneMessage(message);
+            }
+            await context.eventSource.emit('USER_MESSAGE_RENDERED', context.chat.length - 1);
+            if (typeof context.saveChat === 'function') {
+                await context.saveChat();
+            }
+            return;
+        }
 
-    await appendSwipeToMessage(context, targetIndex, introText, {
-        source: 'manual',
-        model: 'Guided Generations',
-    });
+        const messageData = context.chat[targetIndex];
+        if (!messageData) {
+            console.error('[GuidedGenerations] Could not find intro message to update.');
+            return;
+        }
+
+        await appendSwipeToMessage(context, targetIndex, introText, {
+            source: 'manual',
+            model: 'Guided Generations',
+        });
+    }
 }
 
 // Singleton instance
 const editIntrosPopup = new EditIntrosPopup();
 export default editIntrosPopup;
-
-const SCRIPT_PROMPT_KEY = 'script_inject_';
-const INJECT_POSITIONS = {
-    chat: 1,
-};
-const INJECT_ROLES = {
-    system: 0,
-    user: 1,
-    assistant: 2,
-};
-
-function setTemporaryInjection(context, id, value, { position = INJECT_POSITIONS.chat, depth = 0, scan = true, role = INJECT_ROLES.system } = {}) {
-    if (!context.chatMetadata.script_injects) {
-        context.chatMetadata.script_injects = {};
-    }
-
-    context.chatMetadata.script_injects[id] = { value, position, depth, scan, role, filter: null };
-    context.setExtensionPrompt?.(`${SCRIPT_PROMPT_KEY}${id}`, value, position, depth, scan, role);
-    context.saveMetadataDebounced?.();
-}
-
-function flushTemporaryInjection(context, id) {
-    const existingInject = context.chatMetadata?.script_injects?.[id];
-    const position = existingInject?.position ?? INJECT_POSITIONS.chat;
-    const depth = existingInject?.depth ?? 0;
-    const scan = existingInject?.scan ?? true;
-    const role = existingInject?.role ?? INJECT_ROLES.system;
-
-    if (context.chatMetadata?.script_injects) {
-        delete context.chatMetadata.script_injects[id];
-    }
-
-    context.setExtensionPrompt?.(`${SCRIPT_PROMPT_KEY}${id}`, '', position, depth, scan, role);
-    context.saveMetadataDebounced?.();
-}
-
-async function executeSwipeGenerationWithPrompt(context, promptText) {
-    const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
-    const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
-    const filledPrompt = String(promptText || '');
-    const tempMessage = {
-        name: 'Editing Greeting',
-        is_user: false,
-        is_system: false,
-        send_date: Date.now(),
-        mes: 'Editing Greeting',
-        swipes: ['Editing Greeting'],
-        swipe_id: 0,
-        force_avatar: null,
-        extra: {
-            type: 'temp_intro_edit',
-            gen_id: Date.now(),
-        },
-    };
-
-    // Insert deterministically at index 0 so generateNewSwipe targets intro, not temp.
-    context.chat.unshift(tempMessage);
-    if (typeof context.saveChat === 'function') {
-        await context.saveChat();
-    }
-    if (typeof context.reloadCurrentChat === 'function') {
-        await context.reloadCurrentChat();
-    }
-
-    let tempInserted = true;
-    try {
-        await context.executeSlashCommandsWithOptions('/hide 0', {
-            showOutput: false,
-            handleExecutionErrors: true,
-        });
-
-        setTemporaryInjection(context, 'instruct', filledPrompt, { role });
-
-        const swipeSuccess = await generateNewSwipe();
-        if (!swipeSuccess) {
-            return false;
-        }
-        return true;
-    } finally {
-        flushTemporaryInjection(context, 'instruct');
-
-        if (tempInserted) {
-            if (context.chat[0] === tempMessage) {
-                context.chat.splice(0, 1);
-            } else {
-                const fallbackIndex = context.chat.findIndex((message) => message?.extra?.gen_id === tempMessage.extra.gen_id);
-                if (fallbackIndex !== -1) {
-                    context.chat.splice(fallbackIndex, 1);
-                }
-            }
-            if (typeof context.saveChat === 'function') {
-                await context.saveChat();
-            }
-            if (typeof context.reloadCurrentChat === 'function') {
-                await context.reloadCurrentChat();
-            }
-            // reloadCurrentChat rebuilds UI; generation may have left send/stop controls hidden — resync explicitly
-            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-            try {
-                activateSendButtons?.();
-                setSendButtonState?.(false);
-            } catch (_) {
-                /* ignore if SillyTavern API differs */
-            }
-            debugLog('[EditIntros] Removed temporary "Editing Greeting" message after swipe generation.');
-        }
-    }
-}
