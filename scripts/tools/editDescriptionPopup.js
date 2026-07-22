@@ -237,14 +237,16 @@ export class EditDescriptionPopup {
                     label: 'Edit Existing', 
                     variables: [
                         { short: 'i', long: 'instruction', desc: 'User edit instruction' },
-                        { short: 'cd', long: 'currentDescription', desc: 'Current character description' }
+                        { short: 'cd', long: 'currentDescription', desc: 'Current character description' },
+                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
                     ]
                 },
                 { 
                     key: 'makeNew', 
                     label: 'Create New', 
                     variables: [
-                        { short: 'i', long: 'instruction', desc: 'User creation instruction' }
+                        { short: 'i', long: 'instruction', desc: 'User creation instruction' },
+                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
                     ]
                 },
                 { 
@@ -252,14 +254,15 @@ export class EditDescriptionPopup {
                     label: 'Create New with Format', 
                     variables: [
                         { short: 'i', long: 'instruction', desc: 'User creation instruction' },
-                        { short: 'fl', long: 'formatList', desc: 'Format list defined in Format tab' }
+                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
                     ]
                 },
                 { 
                     key: 'createWorld', 
                     label: 'Create World', 
                     variables: [
-                        { short: 'i', long: 'instruction', desc: 'User world creation instruction' }
+                        { short: 'i', long: 'instruction', desc: 'User world creation instruction' },
+                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
                     ]
                 }
             ]);
@@ -812,7 +815,7 @@ export class EditDescriptionPopup {
      */
     async generateDescription(mode = 'editExisting') {
         const customCommandTextarea = this.popupElement.querySelector('#gg-custom-edit-description-command');
-        const instruction = customCommandTextarea.value.trim();
+        let instruction = customCommandTextarea.value.trim();
 
         if (!instruction) {
             this._setInstructionError(true);
@@ -854,6 +857,9 @@ export class EditDescriptionPopup {
             formatList = formatListArray.join('\n\n');
         }
 
+        // Apply format replacement directly in the instruction text
+        instruction = instruction.replaceAll('{{f}}', formatList).replaceAll('{{fl}}', formatList);
+
         try {
             const context = getContext();
             if (!context) {
@@ -864,10 +870,10 @@ export class EditDescriptionPopup {
             let promptText = '';
             if (mode === 'editExisting') {
                 const template = await this.promptTabManager.getPrompt('editExisting');
-                promptText = fillPromptTemplate(template, { instruction, currentDescription });
+                promptText = fillPromptTemplate(template, { instruction, currentDescription, formatList });
             } else if (mode === 'createWorld') {
                 const template = await this.promptTabManager.getPrompt('createWorld');
-                promptText = fillPromptTemplate(template, { instruction });
+                promptText = fillPromptTemplate(template, { instruction, formatList });
             } else {
                 const templateName = formatList ? 'makeNewWithFormat' : 'makeNew';
                 const template = await this.promptTabManager.getPrompt(templateName);
