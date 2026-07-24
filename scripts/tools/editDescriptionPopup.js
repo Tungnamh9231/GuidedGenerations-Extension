@@ -832,6 +832,18 @@ export class EditDescriptionPopup {
         const isEditExisting = mode === 'editExisting';
         if (isEditExisting) {
             this._previousDescription = currentDescription;
+        } else {
+            // For Create New and Create World, clear the existing description immediately
+            // so it doesn't get included in the AI context during generation.
+            if (descriptionTextarea) {
+                descriptionTextarea.value = '';
+                descriptionTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+                descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Wait briefly to allow SillyTavern's event listeners to update character state
+                // before the generation command collects the context.
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
         }
 
         // Close the popup immediately now that validation has passed
@@ -865,6 +877,15 @@ export class EditDescriptionPopup {
             if (!context) {
                 console.error('[GuidedGenerations] Context unavailable for description generation.');
                 return;
+            }
+
+            // Explicitly clear the character's internal description state for Create New/World
+            // so the prompt generation context doesn't include the old description.
+            if (!isEditExisting && context.characters && context.characterId !== undefined) {
+                const char = context.characters[context.characterId];
+                if (char) {
+                    char.description = '';
+                }
             }
 
             let promptText = '';
