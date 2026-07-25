@@ -2,7 +2,7 @@
 
 import { extensionName, loadSettings, updateSettingsUI, addSettingsEventListeners, defaultSettings, debugLog, debugWarn, renderExtensionTemplateAsync, getExtensionManifest, debugProfileSystem } from './persistentGuides/guideExports.js'; // Import from central hub
 
-const DEFAULT_PROMPTS_URL = 'https://raw.githubusercontent.com/Samueras/GuidedGenerations-Extension/develop/prompts.json';
+const DEFAULT_PROMPTS_URL = 'https://raw.githubusercontent.com/Tungnamh9231/GuidedGenerations-Extension/develop/prompts.json';
 const INTERNAL_HELPER_PRESET_VALUE = '__GG_INTERNAL_HELPER__';
 const PROMPT_SETTING_KEYS = [
     'promptClothes',
