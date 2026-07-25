@@ -83,6 +83,9 @@ export class PromptTabManager {
                     <button type="button" id="gg-${this.toolName}-prompt-reset-all-btn" class="gg-button gg-button-quiet" title="Reset all prompts for this tool">
                         Reset All
                     </button>
+                    <button type="button" id="gg-${this.toolName}-prompt-export-btn" class="gg-button gg-button-secondary" title="Export current prompts to a new prompts.json file" style="margin-left: auto;">
+                        <i class="fa-solid fa-download"></i> Export All
+                    </button>
                 </div>
             </section>
         `;
@@ -98,6 +101,7 @@ export class PromptTabManager {
         const textarea = popupElement.querySelector(`#gg-${this.toolName}-prompt-textarea`);
         const resetBtn = popupElement.querySelector(`#gg-${this.toolName}-prompt-reset-btn`);
         const resetAllBtn = popupElement.querySelector(`#gg-${this.toolName}-prompt-reset-all-btn`);
+        const exportBtn = popupElement.querySelector(`#gg-${this.toolName}-prompt-export-btn`);
         
         if (!selector || !textarea) return;
 
@@ -161,6 +165,47 @@ export class PromptTabManager {
                 await loadSelectedPrompt();
             }
         });
+
+        // Export all prompts for this tool
+        if (exportBtn) {
+            exportBtn.addEventListener('click', async () => {
+                try {
+                    const { loadPromptCatalog } = await import('../utils/promptManager.js');
+                    const catalog = await loadPromptCatalog();
+                    
+                    // Clone it to avoid modifying the original memory object
+                    const newCatalog = JSON.parse(JSON.stringify(catalog));
+                    
+                    for (const p of this.promptsConfig) {
+                        const fullKey = `${this.toolName}.${p.key}`;
+                        const customVal = extension_settings[extensionName]?.customPrompts?.[fullKey];
+                        if (customVal !== undefined) {
+                            const parts = fullKey.split('.');
+                            let current = newCatalog;
+                            for (let i = 0; i < parts.length - 1; i++) {
+                                if (!current[parts[i]]) current[parts[i]] = {};
+                                current = current[parts[i]];
+                            }
+                            current[parts[parts.length - 1]] = customVal;
+                        }
+                    }
+
+                    const text = JSON.stringify(newCatalog, null, 2);
+                    const blob = new Blob([text], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = 'prompts.json';
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    console.error('Error exporting prompts:', err);
+                    alert('Error exporting prompts: ' + err.message);
+                }
+            });
+        }
 
         // Initial load
         loadSelectedPrompt();
