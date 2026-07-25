@@ -171,7 +171,7 @@ export class PromptTabManager {
             exportBtn.addEventListener('click', async () => {
                 try {
                     const { loadPromptCatalog } = await import('../utils/promptManager.js');
-                    const catalog = await loadPromptCatalog();
+                    const catalog = await loadPromptCatalog({ force: true });
                     
                     // Clone it to avoid modifying the original memory object
                     const newCatalog = JSON.parse(JSON.stringify(catalog));

@@ -182,6 +182,43 @@ export async function loadSettingsPanel() {
                     downloadDefaultPromptsButton.addEventListener('click', downloadDefaultPromptsFile);
                 }
 
+                const exportCustomPromptsButton = container.querySelector('#ggExportCustomPrompts');
+                if (exportCustomPromptsButton) {
+                    exportCustomPromptsButton.addEventListener('click', async (event) => {
+                        event?.preventDefault();
+                        event?.stopPropagation();
+                        try {
+                            const { loadPromptCatalog } = await import('./utils/promptManager.js');
+                            const catalog = await loadPromptCatalog({ force: true });
+                            const newCatalog = JSON.parse(JSON.stringify(catalog));
+                            
+                            for (const promptKey of PROMPT_SETTING_KEYS) {
+                                const overrideKey = getPromptOverrideSettingKey(promptKey);
+                                const textarea = container.querySelector(`#gg_${promptKey}`);
+                                const checkbox = container.querySelector(`#gg_${overrideKey}`);
+                                
+                                if (textarea && checkbox && !checkbox.checked) {
+                                    newCatalog[promptKey] = textarea.value;
+                                }
+                            }
+                            
+                            const text = JSON.stringify(newCatalog, null, 2);
+                            const blob = new Blob([text], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = url;
+                            link.download = 'prompts.json';
+                            document.body.appendChild(link);
+                            link.click();
+                            link.remove();
+                            URL.revokeObjectURL(url);
+                        } catch (err) {
+                            console.error('Error exporting custom prompts:', err);
+                            alert('Error exporting prompts: ' + err.message);
+                        }
+                    });
+                }
+
                 // Setup debug profile system button
                 const debugButton = container.querySelector('#debugProfileSystem');
                 if (debugButton) {
