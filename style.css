@@ -2612,3 +2612,50 @@ body.square-avatars .gg-picker-avatar-fallback {
     }
 }
 
+/* Corrections Tab Styling Fix */
+#correctionsPopup .gg-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+}
+#correctionsPopup .gg-tab-btn {
+    display: inline-flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--SmartThemeBodyColor);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.95em;
+    font-weight: 500;
+    opacity: 0.7;
+    transition: all 0.2s ease;
+}
+#correctionsPopup .gg-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    opacity: 0.9;
+}
+#correctionsPopup .gg-tab-btn.active {
+    color: var(--SmartThemeBodyColor);
+    background: rgba(255, 255, 255, 0.075);
+    opacity: 1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+#correctionsPopup .gg-tab-btn.active i {
+    color: var(--SmartThemeQuoteColor, var(--SmartThemeAccentColor, #9b87f5));
+}
+#correctionsPopup .gg-tab-content[hidden] {
+    display: none;
+}
+#correctionsPopup textarea:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor, var(--SmartThemeAccentColor, #9b87f5));
+    outline-offset: 2px;
+}
