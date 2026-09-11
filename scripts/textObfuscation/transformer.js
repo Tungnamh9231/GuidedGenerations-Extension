@@ -188,7 +188,7 @@ function createReport(matcher, protectedThrough) {
         samples: [],
         _matchedRuleIds: new Set(),
         _sampleKeys: new Set(),
-        _verificationCounts: new Map(),
+        _verificationBlocks: [],
     };
 }
 
@@ -196,7 +196,6 @@ function recordReplacement(report, rule, match, transformed) {
     report.replacements += 1;
     report._matchedRuleIds.add(rule.id);
     report.insertedMarkers += Math.max(0, countOccurrences(transformed, ZERO_WIDTH_SPACE) - countOccurrences(match, ZERO_WIDTH_SPACE));
-    report._verificationCounts.set(transformed, (report._verificationCounts.get(transformed) ?? 0) + 1);
 
     const sampleKey = `${rule.id}\u0000${match}\u0000${transformed}`;
     if (report.samples.length >= MAX_REPORT_SAMPLES || report._sampleKeys.has(sampleKey)) return;
@@ -206,6 +205,10 @@ function recordReplacement(report, rule, match, transformed) {
         before: match,
         after: escapeZeroWidthForDisplay(transformed),
     });
+}
+
+function recordVerificationBlock(report, transformedText) {
+    report._verificationBlocks.push(transformedText);
 }
 
 function transformWithRule(text, rule, report) {
@@ -270,54 +273,54 @@ function collectSafePayloadText(messages) {
 }
 
 export function verifyFinalPayload(generateData, verificationPlan) {
-    const fragments = Array.isArray(verificationPlan?.fragments) ? verificationPlan.fragments : [];
-    if (!fragments.length) {
+    const blocks = Array.isArray(verificationPlan?.blocks) ? verificationPlan.blocks : [];
+    if (!blocks.length) {
         return {
             status: 'not_needed',
-            expectedOccurrences: 0,
-            matchedOccurrences: 0,
+            expectedBlocks: 0,
+            matchedBlocks: 0,
             expectedMarkers: 0,
             observedMarkers: 0,
-            missingOccurrences: 0,
+            missingBlocks: 0,
         };
     }
 
+    const expectedBlocks = blocks.reduce((sum, block) => sum + (block.count ?? 0), 0);
     if (!Array.isArray(generateData?.messages)) {
         return {
             status: 'unavailable',
             reason: 'final payload messages are unavailable',
-            expectedOccurrences: fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0),
-            matchedOccurrences: 0,
+            expectedBlocks,
+            matchedBlocks: 0,
             expectedMarkers: verificationPlan.expectedMarkers ?? 0,
             observedMarkers: 0,
-            missingOccurrences: fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0),
+            missingBlocks: expectedBlocks,
         };
     }
 
     const textBlocks = collectSafePayloadText(generateData.messages);
-    const expectedOccurrences = fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0);
-    let matchedOccurrences = 0;
-    let missingOccurrences = 0;
+    let matchedBlocks = 0;
+    let missingBlocks = 0;
 
-    for (const fragment of fragments) {
-        const expected = Math.max(0, Number(fragment.count) || 0);
-        const actual = textBlocks.reduce((sum, text) => sum + countOccurrences(text, fragment.text), 0);
-        matchedOccurrences += Math.min(expected, actual);
-        missingOccurrences += Math.max(0, expected - actual);
+    for (const block of blocks) {
+        const expected = Math.max(0, Number(block.count) || 0);
+        const actual = textBlocks.reduce((sum, text) => sum + (text === block.text ? 1 : 0), 0);
+        matchedBlocks += Math.min(expected, actual);
+        missingBlocks += Math.max(0, expected - actual);
     }
 
     const expectedMarkers = Math.max(0, Number(verificationPlan.expectedMarkers) || 0);
     const observedMarkers = textBlocks.reduce((sum, text) => sum + countOccurrences(text, ZERO_WIDTH_SPACE), 0);
-    const fragmentsPresent = missingOccurrences === 0;
+    const blocksPresent = missingBlocks === 0;
     const markerFloorPresent = observedMarkers >= expectedMarkers;
 
     return {
-        status: fragmentsPresent && markerFloorPresent ? 'verified' : 'failed',
-        expectedOccurrences,
-        matchedOccurrences,
+        status: blocksPresent && markerFloorPresent ? 'verified' : 'failed',
+        expectedBlocks,
+        matchedBlocks,
         expectedMarkers,
         observedMarkers,
-        missingOccurrences,
+        missingBlocks,
     };
 }
 
@@ -336,7 +339,10 @@ export function transformChatInPlace(chat, matcher) {
         const content = message.content;
         if (typeof content === 'string') {
             const transformed = transformText(content, matcher, report);
-            if (transformed !== content) stagedMessages.push([index, { ...message, content: transformed }]);
+            if (transformed !== content) {
+                recordVerificationBlock(report, transformed);
+                stagedMessages.push([index, { ...message, content: transformed }]);
+            }
             continue;
         }
 
@@ -350,6 +356,7 @@ export function transformChatInPlace(chat, matcher) {
             const transformed = transformText(block.text, matcher, report);
             if (transformed === block.text) continue;
 
+            recordVerificationBlock(report, transformed);
             if (!contentChanged) nextContent = content.slice();
             nextContent[blockIndex] = { ...block, text: transformed };
             contentChanged = true;
@@ -364,12 +371,14 @@ export function transformChatInPlace(chat, matcher) {
 
 function finalizeReport(report) {
     report.matchedPatterns = report._matchedRuleIds.size;
+    const blockCounts = new Map();
+    for (const text of report._verificationBlocks) blockCounts.set(text, (blockCounts.get(text) ?? 0) + 1);
     report.verificationPlan = {
-        fragments: Array.from(report._verificationCounts, ([text, count]) => ({ text, count })),
+        blocks: Array.from(blockCounts, ([text, count]) => ({ text, count })),
         expectedMarkers: report.insertedMarkers,
     };
     delete report._matchedRuleIds;
     delete report._sampleKeys;
-    delete report._verificationCounts;
+    delete report._verificationBlocks;
     return report;
 }
