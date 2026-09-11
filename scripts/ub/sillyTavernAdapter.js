@@ -2,6 +2,10 @@ import { getContext } from '../../../../../extensions.js';
 import { promptManager, reasoning_effort_types } from '../../../../../openai.js';
 import { EFFORT_VALUES, UB_BUTTON_ATTR } from './constants.js';
 
+const HIDDEN_EXTRA_ATTR = 'data-gg-native-ub-hidden-extra';
+const PREV_DISPLAY_ATTR = 'data-gg-native-ub-prev-display';
+const PREV_PRIORITY_ATTR = 'data-gg-native-ub-prev-display-priority';
+
 const VALID_EFFORTS = new Set([
     reasoning_effort_types?.min ?? 'min',
     reasoning_effort_types?.low ?? 'low',
@@ -36,7 +40,6 @@ function getOrderEntry(identifier) {
 
 export function listPromptEntries() {
     if (!isPromptManagerReady()) return [];
-
     return promptManager.serviceSettings.prompts
         .filter(prompt => prompt?.identifier && !prompt.marker)
         .map(prompt => {
@@ -62,8 +65,6 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
         return { changed: false, missing: [...enabledByIdentifier.keys()], unavailable: true };
     }
 
-    // Resolve everything before mutating anything. This makes state application
-    // transactional with respect to missing/deleted prompts.
     const resolved = [];
     const missing = [];
     for (const [identifier, enabled] of enabledByIdentifier.entries()) {
@@ -87,8 +88,6 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
         try {
             await promptManager.saveServiceSettings();
         } catch (error) {
-            // Restore in-memory state as well as the rendered Prompt Manager if
-            // persistence fails, so callers never observe a half-applied state.
             for (const item of previous) item.entry.enabled = item.enabled;
             promptManager.render();
             throw error;
@@ -118,10 +117,8 @@ export function setReasoningEffort(effort) {
     const changed = settings.reasoning_effort !== normalized;
     settings.reasoning_effort = normalized;
 
-    // UI-only synchronization. The setting object above remains the source of truth.
     const select = document.getElementById('openai_reasoning_effort');
     if (select && select.value !== normalized) select.value = normalized;
-
     if (changed) context.saveSettingsDebounced();
     return changed;
 }
@@ -131,21 +128,88 @@ export function getEventBus() {
     return { eventSource: context.eventSource, eventTypes: context.eventTypes };
 }
 
+function normalizeMessageId(value) {
+    if (value && typeof value === 'object') {
+        return value.messageId ?? value.mesId ?? value.id ?? null;
+    }
+    return value;
+}
+
 export function getMessageElement(messageId) {
-    const id = CSS.escape(String(messageId));
-    return document.querySelector(`#chat > .mes[mesid="${id}"]`);
+    const normalized = normalizeMessageId(messageId);
+    if (normalized === null || normalized === undefined) return null;
+    const id = CSS.escape(String(normalized));
+    return document.querySelector(`#chat .mes[mesid="${id}"]`);
 }
 
 export function getDisplayedMessageIds() {
-    return [...document.querySelectorAll('#chat > .mes[mesid]')]
+    return [...document.querySelectorAll('#chat .mes[mesid]')]
         .map(element => element.getAttribute('mesid'))
         .filter(id => id !== null);
 }
 
 export function resolveMessageToolbar(messageId) {
+    return getMessageElement(messageId)?.querySelector('.mes_buttons') ?? null;
+}
+
+function isCopyButton(element) {
+    if (!(element instanceof Element)) return false;
+    const text = [
+        element.getAttribute('title'),
+        element.getAttribute('aria-label'),
+        element.getAttribute('data-i18n'),
+        element.dataset?.i18n,
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (text.includes('copy')) return true;
+    if (element.classList.contains('mes_copy')) return true;
+    return Boolean(element.querySelector('.fa-copy, .fa-clone'));
+}
+
+function restoreElementDisplay(element) {
+    if (!element.hasAttribute(HIDDEN_EXTRA_ATTR)) return;
+    const previous = element.getAttribute(PREV_DISPLAY_ATTR) ?? '';
+    const priority = element.getAttribute(PREV_PRIORITY_ATTR) ?? '';
+    if (previous) element.style.setProperty('display', previous, priority);
+    else element.style.removeProperty('display');
+    element.removeAttribute(HIDDEN_EXTRA_ATTR);
+    element.removeAttribute(PREV_DISPLAY_ATTR);
+    element.removeAttribute(PREV_PRIORITY_ATTR);
+}
+
+/**
+ * Reproduce the userscript's compact toolbar layout without destroying native
+ * nodes: all extra message actions are hidden except Copy, and can be restored
+ * exactly when Native UB is disabled.
+ */
+export function compactMessageToolbar(messageId) {
     const message = getMessageElement(messageId);
     if (!message) return null;
-    return message.querySelector('.extraMesButtons') || message.querySelector('.mes_buttons');
+    const mesButtons = message.querySelector('.mes_buttons');
+    if (!mesButtons) return null;
+    const extraButtons = mesButtons.querySelector('.extraMesButtons');
+    if (!extraButtons) return mesButtons;
+
+    for (const child of [...extraButtons.children]) {
+        if (child.hasAttribute(UB_BUTTON_ATTR)) continue;
+        if (isCopyButton(child)) {
+            restoreElementDisplay(child);
+            continue;
+        }
+        if (!child.hasAttribute(HIDDEN_EXTRA_ATTR)) {
+            child.setAttribute(PREV_DISPLAY_ATTR, child.style.getPropertyValue('display') || '');
+            child.setAttribute(PREV_PRIORITY_ATTR, child.style.getPropertyPriority('display') || '');
+            child.setAttribute(HIDDEN_EXTRA_ATTR, 'true');
+        }
+        child.style.setProperty('display', 'none', 'important');
+    }
+
+    extraButtons.classList.add('gg-native-ub-extra-compact');
+    return mesButtons;
+}
+
+export function restoreCompactedMessageToolbars() {
+    document.querySelectorAll(`[${HIDDEN_EXTRA_ATTR}]`).forEach(restoreElementDisplay);
+    document.querySelectorAll('.gg-native-ub-extra-compact').forEach(element => element.classList.remove('gg-native-ub-extra-compact'));
 }
 
 export function removeOwnedMessageButtons() {
