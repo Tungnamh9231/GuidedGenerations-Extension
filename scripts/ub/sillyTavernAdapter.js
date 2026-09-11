@@ -38,6 +38,58 @@ function getOrderEntry(identifier) {
     }
 }
 
+function getPromptRow(identifier) {
+    const escapedIdentifier = CSS.escape(String(identifier));
+    const prefix = String(promptManager?.configuration?.prefix ?? 'completion_');
+    const listId = `${prefix}prompt_manager_list`;
+    return document.querySelector(`#${CSS.escape(listId)} [data-pm-identifier="${escapedIdentifier}"]`)
+        ?? document.querySelector(`[data-pm-identifier="${escapedIdentifier}"]`);
+}
+
+function syncPromptDomState(identifier, enabled) {
+    const row = getPromptRow(identifier);
+    if (!row) return;
+
+    const prefix = String(promptManager?.configuration?.prefix ?? 'completion_');
+    row.classList.toggle(`${prefix}prompt_manager_prompt_disabled`, !enabled);
+
+    // Compatibility with current and older PromptManager controls. The row class
+    // is the canonical visual state in current ST; these are best-effort mirrors.
+    const toggle = row.querySelector('.prompt_manager_enable_cb, label.checkbox_label input, .prompt-manager-toggle-action');
+    if (toggle instanceof HTMLInputElement) {
+        toggle.checked = Boolean(enabled);
+    } else if (toggle instanceof Element) {
+        if (toggle.hasAttribute('aria-checked')) toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+        if (toggle.hasAttribute('aria-pressed')) toggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    }
+}
+
+function invalidatePromptTokenCount(identifier) {
+    try {
+        const counts = promptManager?.tokenHandler?.getCounts?.();
+        if (counts && typeof counts === 'object') counts[identifier] = null;
+    } catch (error) {
+        // Token counts are UI/cache metadata. State application must not fail if
+        // an upstream TokenHandler implementation changes.
+        console.debug('[GG Native UB] Could not invalidate prompt token count:', identifier, error);
+    }
+}
+
+function persistPromptManagerInBackground() {
+    try {
+        const result = promptManager.saveServiceSettings?.();
+        if (result && typeof result.catch === 'function') {
+            result.catch(error => {
+                console.error('[GG Native UB] Prompt state changed in memory but persistence failed:', error);
+                globalThis.toastr?.error?.('UB prompt state changed, but SillyTavern failed to save settings.');
+            });
+        }
+    } catch (error) {
+        console.error('[GG Native UB] Prompt state changed in memory but persistence failed:', error);
+        globalThis.toastr?.error?.('UB prompt state changed, but SillyTavern failed to save settings.');
+    }
+}
+
 export function listPromptEntries() {
     if (!isPromptManagerReady()) return [];
     return promptManager.serviceSettings.prompts
@@ -60,40 +112,47 @@ export function getPromptEnabled(identifier) {
     return entry ? Boolean(entry.enabled) : null;
 }
 
+/**
+ * Apply a complete UB prompt-state map using SillyTavern's own PromptManager
+ * model, but deliberately avoid PromptManager.render() on the hot path.
+ *
+ * PromptManager.render() performs tryGenerate() by default before repainting the
+ * manager. Awaiting that for every toolbar click made UB transitions feel slow
+ * and could keep the toolbar locked for seconds. ST's own toggle handler mutates
+ * promptOrderEntry.enabled and invalidates token counts before render/save, so we
+ * perform those state mutations directly, mirror the visible row state, and let
+ * settings persistence run in the background.
+ */
 export async function applyPromptEnabledMap(enabledByIdentifier) {
     if (!isPromptManagerReady()) {
         return { changed: false, missing: [...enabledByIdentifier.keys()], unavailable: true };
     }
 
+    // Resolve every identifier before changing any state. This preserves the
+    // all-or-nothing behavior for deleted/missing prompts.
     const resolved = [];
     const missing = [];
     for (const [identifier, enabled] of enabledByIdentifier.entries()) {
         const entry = getOrderEntry(identifier);
         if (!entry) missing.push(identifier);
-        else resolved.push({ entry, enabled: Boolean(enabled) });
+        else resolved.push({ identifier, entry, enabled: Boolean(enabled) });
     }
     if (missing.length) return { changed: false, missing, unavailable: false };
 
     let changed = false;
-    const previous = resolved.map(({ entry }) => ({ entry, enabled: Boolean(entry.enabled) }));
-    for (const { entry, enabled } of resolved) {
-        if (Boolean(entry.enabled) !== enabled) {
-            entry.enabled = enabled;
-            changed = true;
+    for (const { identifier, entry, enabled } of resolved) {
+        if (Boolean(entry.enabled) === enabled) {
+            syncPromptDomState(identifier, enabled);
+            continue;
         }
+
+        entry.enabled = enabled;
+        invalidatePromptTokenCount(identifier);
+        syncPromptDomState(identifier, enabled);
+        changed = true;
     }
 
-    if (changed) {
-        promptManager.render();
-        try {
-            await promptManager.saveServiceSettings();
-        } catch (error) {
-            for (const item of previous) item.entry.enabled = item.enabled;
-            promptManager.render();
-            throw error;
-        }
-    }
-
+    if (changed) persistPromptManagerInBackground();
     return { changed, missing: [], unavailable: false };
 }
 
@@ -118,7 +177,13 @@ export function setReasoningEffort(effort) {
     settings.reasoning_effort = normalized;
 
     const select = document.getElementById('openai_reasoning_effort');
-    if (select && select.value !== normalized) select.value = normalized;
+    if (select && select.value !== normalized) {
+        select.value = normalized;
+        // Keep SillyTavern's own input-driven UI/settings listeners in sync while
+        // retaining the settings object above as the source of truth.
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
     if (changed) context.saveSettingsDebounced();
     return changed;
 }
