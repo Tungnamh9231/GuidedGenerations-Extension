@@ -241,10 +241,23 @@ function restoreElementDisplay(element) {
     element.removeAttribute(PREV_PRIORITY_ATTR);
 }
 
+function hideElementDisplay(element) {
+    if (!(element instanceof Element)) return;
+    if (!element.hasAttribute(HIDDEN_EXTRA_ATTR)) {
+        element.setAttribute(PREV_DISPLAY_ATTR, element.style.getPropertyValue('display') || '');
+        element.setAttribute(PREV_PRIORITY_ATTR, element.style.getPropertyPriority('display') || '');
+        element.setAttribute(HIDDEN_EXTRA_ATTR, 'true');
+    }
+    element.style.setProperty('display', 'none', 'important');
+}
+
 /**
  * Reproduce the userscript's compact toolbar layout without destroying native
  * nodes: all extra message actions are hidden except Copy, and can be restored
- * exactly when Native UB is disabled.
+ * exactly when Native UB is disabled. Since the compact toolbar keeps its two
+ * useful extra actions (F + Copy) visible, SillyTavern's ellipsis expander is
+ * also hidden; otherwise clicking it can collapse the extra container and leave
+ * an empty reserved area between UB controls and the native edit action.
  */
 export function compactMessageToolbar(messageId) {
     const message = getMessageElement(messageId);
@@ -254,18 +267,16 @@ export function compactMessageToolbar(messageId) {
     const extraButtons = mesButtons.querySelector('.extraMesButtons');
     if (!extraButtons) return mesButtons;
 
+    const extraButtonsHint = mesButtons.querySelector('.extraMesButtonsHint');
+    if (extraButtonsHint) hideElementDisplay(extraButtonsHint);
+
     for (const child of [...extraButtons.children]) {
         if (child.hasAttribute(UB_BUTTON_ATTR)) continue;
         if (isCopyButton(child)) {
             restoreElementDisplay(child);
             continue;
         }
-        if (!child.hasAttribute(HIDDEN_EXTRA_ATTR)) {
-            child.setAttribute(PREV_DISPLAY_ATTR, child.style.getPropertyValue('display') || '');
-            child.setAttribute(PREV_PRIORITY_ATTR, child.style.getPropertyPriority('display') || '');
-            child.setAttribute(HIDDEN_EXTRA_ATTR, 'true');
-        }
-        child.style.setProperty('display', 'none', 'important');
+        hideElementDisplay(child);
     }
 
     extraButtons.classList.add('gg-native-ub-extra-compact');
