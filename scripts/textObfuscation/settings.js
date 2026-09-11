@@ -103,6 +103,25 @@ function describeVerification(verification) {
     }
 }
 
+function describeDispatch(dispatch) {
+    switch (dispatch?.status) {
+        case 'verified':
+            return `Network dispatch: ✓ fetch observed + payload verified · ${dispatch.matchedOccurrences}/${dispatch.expectedOccurrences} transformed occurrence(s) present · ${dispatch.observedMarkers} U+200B observed.`;
+        case 'failed':
+            return `Network dispatch: ⚠ fetch observed but payload verification failed · ${dispatch.matchedOccurrences}/${dispatch.expectedOccurrences} transformed occurrence(s) found · ${dispatch.missingOccurrences} missing.`;
+        case 'observed':
+            return `Network dispatch: ✓ fetch observed · payload verification unavailable${dispatch.reason ? ` (${dispatch.reason})` : ''}.`;
+        case 'pending':
+            return 'Network dispatch: … waiting for Chat Completion fetch.';
+        case 'unavailable':
+            return `Network dispatch: ? observer unavailable${dispatch.reason ? ` (${dispatch.reason})` : ''}.`;
+        case 'not_needed':
+            return 'Network dispatch: — no transformed occurrence to verify.';
+        default:
+            return 'Network dispatch: ? state unavailable.';
+    }
+}
+
 export class TextObfuscationSettingsView {
     constructor() {
         this.section = null;
@@ -310,7 +329,7 @@ export class TextObfuscationSettingsView {
         const settings = getTextObfuscationSettings();
         this.enabledInput.checked = settings.enabled;
         this.renderRules(settings.rules);
-        this.meta.textContent = `${settings.rules.length} rule(s) · longest phrase first · U+200B · final-payload verification enabled`;
+        this.meta.textContent = `${settings.rules.length} rule(s) · longest phrase first · U+200B · final-payload + network-dispatch verification enabled`;
 
         this.status.className = 'gg-text-obfuscation-status';
         this.samples.replaceChildren();
@@ -337,13 +356,15 @@ export class TextObfuscationSettingsView {
             ? ` · ${this.lastReport.protectedMessages} signed-prefix message(s) protected`
             : '';
         const verification = this.lastReport.verification;
+        const dispatch = this.lastReport.dispatch;
         const verificationBad = verification?.status === 'failed' || verification?.status === 'unavailable';
-        if (verification?.status === 'verified') this.status.classList.add('is-ok');
-        else if (verificationBad || this.lastReport.replacements === 0) this.status.classList.add('is-warn');
+        const dispatchBad = dispatch?.status === 'failed' || dispatch?.status === 'unavailable' || dispatch?.status === 'observed';
+        if (verification?.status === 'verified' && !dispatchBad) this.status.classList.add('is-ok');
+        else if (verificationBad || dispatchBad || this.lastReport.replacements === 0) this.status.classList.add('is-warn');
 
         const transformLine = `Last transform: ${this.lastReport.replacements} replacement(s) · ${this.lastReport.matchedPatterns} matched rule(s) · ${this.lastReport.textBlocks} text block(s)${protectedText}`;
         const verificationLine = describeVerification(verification);
-        const dispatchLine = 'Network dispatch: not intercepted · verification stops at SillyTavern final payload stage before the normal fetch path.';
+        const dispatchLine = describeDispatch(dispatch);
         this.status.textContent = `${transformLine}\n${verificationLine}\n${dispatchLine}`;
 
         for (const sample of this.lastReport.samples ?? []) {
