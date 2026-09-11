@@ -115,7 +115,12 @@ function waitForActivePopupCheckbox(id, timeoutMs = POPUP_WAIT_MS) {
             observer.disconnect();
             if (timer) clearTimeout(timer);
         };
-        observer.observe(document.body, { childList: true, subtree: true });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['open'],
+        });
         timer = setTimeout(() => {
             cleanup();
             resolve(null);
@@ -176,14 +181,18 @@ export class MinorQolController {
     handleDocumentClick(event) {
         const target = event.target instanceof Element ? event.target : null;
         if (!target) return;
-        const settings = getMinorQolSettings();
 
-        if (settings.autoConfirmNewChat && target.closest('#option_start_new_chat')) {
+        const newChatTrigger = target.closest('#option_start_new_chat');
+        const deleteCharacterTrigger = target.closest('#delete_button');
+        if (!newChatTrigger && !deleteCharacterTrigger) return;
+
+        const settings = getMinorQolSettings();
+        if (newChatTrigger && settings.autoConfirmNewChat) {
             void this.autoTickAndConfirm('del_chat_checkbox', 'autoConfirmNewChat');
             return;
         }
 
-        if (settings.autoConfirmDeleteCharacter && target.closest('#delete_button')) {
+        if (deleteCharacterTrigger && settings.autoConfirmDeleteCharacter) {
             void this.autoTickAndConfirm('del_char_checkbox', 'autoConfirmDeleteCharacter');
         }
     }
