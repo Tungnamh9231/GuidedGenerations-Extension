@@ -75,7 +75,7 @@ export class TextObfuscationController {
         });
     }
 
-    publishReport(report, verificationPlan) {
+    publishReport(report, verificationPlan, chatRef) {
         const reportId = ++this.reportSerial;
         this.latestReportId = reportId;
         const publicReport = { ...report, reportId };
@@ -104,6 +104,7 @@ export class TextObfuscationController {
                 reportId,
                 report: publicReport,
                 plan: verificationPlan,
+                chatRef,
             });
             if (this.pendingVerifications.length > MAX_PENDING_VERIFICATIONS) this.pendingVerifications.shift();
         }
@@ -127,7 +128,7 @@ export class TextObfuscationController {
                         protectedMessages: 0,
                         insertedMarkers: 0,
                         samples: [],
-                    }, null);
+                    }, null, eventData?.chat);
                 }
                 return;
             }
@@ -142,7 +143,7 @@ export class TextObfuscationController {
 
             const verificationPlan = report.verificationPlan;
             delete report.verificationPlan;
-            this.publishReport(report, verificationPlan);
+            this.publishReport(report, verificationPlan, eventData.chat);
         } catch (error) {
             console.error('[GG Unicode Sensitive Words] Transform failed; continuing with SillyTavern pipeline.', error);
             if (!eventData?.dryRun) this.publishError(error);
@@ -159,19 +160,36 @@ export class TextObfuscationController {
                 result: verifyFinalPayload(generateData, pending.plan),
             }));
 
-            let selected = candidates.find(candidate => candidate.result.status === 'verified');
+            // Strongest correlation: SillyTavern normally carries the same messages array
+            // from CHAT_COMPLETION_PROMPT_READY into generate_data.messages.
+            let selected = candidates.find(candidate => candidate.pending.chatRef === generateData?.messages);
+            let correlation = selected ? 'identity' : null;
+
+            // Fallback for providers/paths that rebuild the messages array: correlate using
+            // the transformed block fingerprints, preferring a full verification match.
+            if (!selected) {
+                selected = candidates.find(candidate => candidate.result.status === 'verified');
+                if (selected) correlation = 'fingerprint';
+            }
             if (!selected) {
                 const ranked = candidates
                     .filter(candidate => candidate.result.status !== 'unavailable')
                     .sort((a, b) => (b.result.matchedBlocks ?? 0) - (a.result.matchedBlocks ?? 0));
-                if ((ranked[0]?.result?.matchedBlocks ?? 0) > 0) selected = ranked[0];
+                if ((ranked[0]?.result?.matchedBlocks ?? 0) > 0) {
+                    selected = ranked[0];
+                    correlation = 'fingerprint';
+                }
             }
-            if (!selected && candidates.length === 1) selected = candidates[0];
+            if (!selected && candidates.length === 1) {
+                selected = candidates[0];
+                correlation = 'queue';
+            }
             if (!selected) return;
 
             this.pendingVerifications.splice(selected.index, 1);
             const verification = {
                 ...selected.result,
+                correlation,
                 expectedOccurrences: selected.result.expectedBlocks ?? 0,
                 matchedOccurrences: selected.result.matchedBlocks ?? 0,
                 missingOccurrences: selected.result.missingBlocks ?? 0,
