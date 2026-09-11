@@ -268,9 +268,8 @@ function forceCompactExtraButtons(element) {
         element.setAttribute(COMPACT_EXTRA_ATTR, 'true');
     }
 
-    // SillyTavern's ellipsis handler marks this container as `.visible`, and its
-    // document-level click handler later hides every `.extraMesButtons.visible`.
-    // Compact mode must therefore detach from that native open/close state.
+    // Legacy compact mode forced the menu permanently open. Kept only so an
+    // already-running pre-update DOM can be restored safely during hot reload.
     element.classList.remove('visible');
     element.style.setProperty('display', 'inline-flex', 'important');
     element.style.setProperty('opacity', '1', 'important');
@@ -302,12 +301,12 @@ function restoreCompactExtraButtons(element) {
 }
 
 /**
- * Reproduce the userscript's compact toolbar layout without destroying native
- * nodes: all extra message actions are hidden except Copy, and can be restored
- * exactly when Native UB is disabled. Since the compact toolbar keeps its two
- * useful extra actions (F + Copy) visible, SillyTavern's ellipsis expander is
- * also hidden; otherwise clicking it can collapse the extra container and leave
- * an empty reserved area between UB controls and the native edit action.
+ * Keep Native UB controls compact without replacing SillyTavern's own message
+ * actions menu. The ellipsis and `.extraMesButtons` open/close lifecycle stay
+ * native. Inside that menu we retain Copy plus UB-owned actions; unrelated
+ * native extra actions are hidden reversibly. The native Edit button is hidden
+ * from the outer toolbar so MessageToolbarController can expose an Edit proxy
+ * inside the ellipsis menu without moving SillyTavern's own DOM node.
  */
 export function compactMessageToolbar(messageId) {
     const message = getMessageElement(messageId);
@@ -317,13 +316,13 @@ export function compactMessageToolbar(messageId) {
     const extraButtons = mesButtons.querySelector('.extraMesButtons');
     if (!extraButtons) return mesButtons;
 
-    // Normalize the extra-action container every time compact mode is entered.
-    // This makes `UB off -> open ... -> UB on` identical to a fresh UB-on state.
-    extraButtons.classList.add('gg-native-ub-extra-compact');
-    forceCompactExtraButtons(extraButtons);
+    // Undo the legacy forced-open state if a previous extension version touched
+    // this already-rendered message, then hand visibility back to ST's ellipsis.
+    restoreCompactExtraButtons(extraButtons);
+    extraButtons.classList.remove('gg-native-ub-extra-compact');
 
     const extraButtonsHint = mesButtons.querySelector('.extraMesButtonsHint');
-    if (extraButtonsHint) hideElementDisplay(extraButtonsHint);
+    if (extraButtonsHint) restoreElementDisplay(extraButtonsHint);
 
     for (const child of [...extraButtons.children]) {
         if (child.hasAttribute(UB_BUTTON_ATTR)) continue;
@@ -333,6 +332,9 @@ export function compactMessageToolbar(messageId) {
         }
         hideElementDisplay(child);
     }
+
+    const nativeEdit = mesButtons.querySelector('.mes_edit');
+    if (nativeEdit && !nativeEdit.hasAttribute(UB_BUTTON_ATTR)) hideElementDisplay(nativeEdit);
 
     return mesButtons;
 }
