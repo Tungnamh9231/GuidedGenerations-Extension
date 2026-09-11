@@ -137,6 +137,11 @@ export function transformChatInPlace(chat, matcher) {
     const report = createReport(matcher, protectedThrough);
     if (!Array.isArray(chat) || !matcher?.regex) return finalizeReport(report);
 
+    // Stage copy-on-write replacements and commit them only after the full walk
+    // succeeds. This prevents a thrown edge case from leaving a half-mutated
+    // prompt in SillyTavern's generation pipeline.
+    const stagedMessages = [];
+
     for (let index = protectedThrough + 1; index < chat.length; index += 1) {
         const message = chat[index];
         if (!message || typeof message !== 'object' || !isMutableTextRole(message)) continue;
@@ -144,7 +149,7 @@ export function transformChatInPlace(chat, matcher) {
         const content = message.content;
         if (typeof content === 'string') {
             const transformed = transformText(content, matcher, report);
-            if (transformed !== content) chat[index] = { ...message, content: transformed };
+            if (transformed !== content) stagedMessages.push([index, { ...message, content: transformed }]);
             continue;
         }
 
@@ -163,9 +168,10 @@ export function transformChatInPlace(chat, matcher) {
             contentChanged = true;
         }
 
-        if (contentChanged) chat[index] = { ...message, content: nextContent };
+        if (contentChanged) stagedMessages.push([index, { ...message, content: nextContent }]);
     }
 
+    for (const [index, message] of stagedMessages) chat[index] = message;
     return finalizeReport(report);
 }
 
