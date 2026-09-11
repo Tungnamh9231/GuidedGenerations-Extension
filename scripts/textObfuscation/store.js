@@ -1,10 +1,10 @@
 import { getContext } from '../../../../../extensions.js';
-import { GG_EXTENSION_NAME, SETTINGS_KEY, SETTINGS_SCHEMA_VERSION } from './constants.js';
+import { GG_EXTENSION_NAME, SETTINGS_KEY, SETTINGS_SCHEMA_VERSION, ZERO_WIDTH_SPACE } from './constants.js';
 
 const DEFAULTS = Object.freeze({
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     enabled: false,
-    patternsText: '',
+    rules: [],
 });
 
 function clone(value) {
@@ -22,12 +22,64 @@ function toBoolean(value, fallback = false) {
     return value == null ? fallback : Boolean(value);
 }
 
+function patternKey(pattern) {
+    return String(pattern).toLowerCase();
+}
+
+function sanitizeRule(rule, index) {
+    if (!rule || typeof rule !== 'object') return null;
+    const pattern = String(rule.pattern ?? rule.text ?? '').trim();
+    if (!pattern || pattern.includes(ZERO_WIDTH_SPACE)) return null;
+    return {
+        id: String(rule.id ?? `rule-${index + 1}`),
+        pattern,
+        strictWord: toBoolean(rule.strictWord, false),
+        caseSensitive: toBoolean(rule.caseSensitive, false),
+        allWords: toBoolean(rule.allWords ?? rule.multiWordUnicode, false),
+    };
+}
+
+function legacyRules(source) {
+    const legacyText = String(source.patternsText ?? source.words ?? '').replace(/\r\n?/gu, '\n');
+    const seen = new Set();
+    const rules = [];
+    for (const rawLine of legacyText.split('\n')) {
+        const pattern = rawLine.trim();
+        const key = patternKey(pattern);
+        if (!pattern || pattern.includes(ZERO_WIDTH_SPACE) || seen.has(key)) continue;
+        seen.add(key);
+        rules.push({
+            id: `legacy-${rules.length + 1}`,
+            pattern,
+            strictWord: false,
+            caseSensitive: false,
+            allWords: false,
+        });
+    }
+    return rules;
+}
+
 function normalize(settings) {
     const source = settings && typeof settings === 'object' ? settings : {};
+    const sourceRules = Array.isArray(source.rules)
+        ? source.rules.map(sanitizeRule).filter(Boolean)
+        : legacyRules(source);
+
+    const seen = new Set();
+    const rules = [];
+    for (const rule of sourceRules) {
+        // Case variants share one rule. Casing behavior belongs to the rule's
+        // Case sensitive option; allowing both would create order-dependent matches.
+        const key = patternKey(rule.pattern);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rules.push(rule);
+    }
+
     return {
         schemaVersion: SETTINGS_SCHEMA_VERSION,
         enabled: toBoolean(source.enabled, DEFAULTS.enabled),
-        patternsText: String(source.patternsText ?? source.words ?? DEFAULTS.patternsText).replace(/\r\n?/gu, '\n'),
+        rules,
     };
 }
 
