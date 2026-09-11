@@ -87,7 +87,7 @@ export class TextObfuscationController {
                 status: 'unavailable',
                 reason: 'CHAT_COMPLETION_SETTINGS_READY is unavailable',
             };
-        } else if (!verificationPlan?.fragments?.length) {
+        } else if (!verificationPlan?.blocks?.length) {
             publicReport.verification = {
                 status: 'unavailable',
                 reason: 'verification plan is empty',
@@ -95,7 +95,7 @@ export class TextObfuscationController {
         } else {
             publicReport.verification = {
                 status: 'pending',
-                expectedOccurrences: verificationPlan.fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0),
+                expectedBlocks: verificationPlan.blocks.reduce((sum, block) => sum + (block.count ?? 0), 0),
                 expectedMarkers: verificationPlan.expectedMarkers ?? 0,
             };
             this.pendingVerifications.push({
@@ -149,8 +149,14 @@ export class TextObfuscationController {
     }
 
     handleSettingsReady(generateData) {
+        // Defer one task so every CHAT_COMPLETION_SETTINGS_READY listener gets a chance
+        // to finish mutating the same generateData object before we verify it.
+        setTimeout(() => this.verifySettingsPayload(generateData), 0);
+    }
+
+    verifySettingsPayload(generateData) {
         try {
-            if (!this.pendingVerifications.length) return;
+            if (!this.active || !this.pendingVerifications.length) return;
 
             const candidates = this.pendingVerifications.map((pending, index) => ({
                 index,
@@ -158,14 +164,14 @@ export class TextObfuscationController {
                 result: verifyFinalPayload(generateData, pending.plan),
             }));
 
-            // A positive fragment match is a stronger correlation signal than queue order
+            // A positive block match is a stronger correlation signal than queue order
             // if two extension-driven generations ever overlap.
             let selected = candidates.find(candidate => candidate.result.status === 'verified');
             if (!selected) {
                 const ranked = candidates
                     .filter(candidate => candidate.result.status !== 'unavailable')
-                    .sort((a, b) => (b.result.matchedOccurrences ?? 0) - (a.result.matchedOccurrences ?? 0));
-                if ((ranked[0]?.result?.matchedOccurrences ?? 0) > 0) selected = ranked[0];
+                    .sort((a, b) => (b.result.matchedBlocks ?? 0) - (a.result.matchedBlocks ?? 0));
+                if ((ranked[0]?.result?.matchedBlocks ?? 0) > 0) selected = ranked[0];
             }
             if (!selected && candidates.length === 1) selected = candidates[0];
             if (!selected) return;
