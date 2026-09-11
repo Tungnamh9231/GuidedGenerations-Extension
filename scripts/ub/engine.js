@@ -101,11 +101,12 @@ export async function applyTabState(tab, targetState) {
 
     const enabledMap = new Map(configuredIds.map(identifier => [identifier, false]));
     let targetBlock = null;
+    let desiredEffort = null;
 
     if (tab.isDefault && targetState === 'UB') {
-        if (tab.changeEffort) setReasoningEffort('high');
+        if (tab.changeEffort) desiredEffort = 'high';
     } else if (tab.isDefault && targetState === 'LJB') {
-        if (tab.changeEffort) setReasoningEffort('min');
+        if (tab.changeEffort) desiredEffort = 'min';
     } else if (!tab.isDefault && targetState === 'OFF') {
         // All configured blocks remain disabled.
     } else {
@@ -114,9 +115,11 @@ export async function applyTabState(tab, targetState) {
         if (!targetBlock) throw new Error(`No block mapped for ${targetState}`);
 
         for (const identifier of refsForBlock(targetBlock)) enabledMap.set(identifier, true);
-        if (tab.changeEffort) setReasoningEffort(normalizeEffort(targetBlock.effort));
+        if (tab.changeEffort) desiredEffort = normalizeEffort(targetBlock.effort);
     }
 
+    // PromptManager persistence is the more failure-prone operation. Commit it
+    // first; only update reasoning effort after the prompt transaction succeeds.
     const result = await applyPromptEnabledMap(enabledMap);
     if (result.missing.length) {
         const error = new Error(`Missing ${result.missing.length} prompt(s) in the active Prompt Manager.`);
@@ -125,6 +128,7 @@ export async function applyTabState(tab, targetState) {
         throw error;
     }
 
+    if (desiredEffort !== null) setReasoningEffort(desiredEffort);
     return { state: targetState, block: targetBlock };
 }
 
