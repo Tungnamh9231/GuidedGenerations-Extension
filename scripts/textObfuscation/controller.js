@@ -37,6 +37,14 @@ export class TextObfuscationController {
         this.active = false;
     }
 
+    safeSetLastReport(report) {
+        try {
+            this.settingsView?.setLastReport(report);
+        } catch (error) {
+            console.debug('[GG Unicode Sensitive Words] Could not update transform report UI.', error);
+        }
+    }
+
     handlePromptReady(eventData) {
         try {
             const settings = peekTextObfuscationSettings();
@@ -45,7 +53,7 @@ export class TextObfuscationController {
             const matcher = buildMatcher(settings.patternsText);
             if (!matcher) {
                 if (!eventData?.dryRun) {
-                    this.settingsView?.setLastReport({
+                    this.safeSetLastReport({
                         activePatterns: 0,
                         replacements: 0,
                         matchedPatterns: 0,
@@ -58,16 +66,16 @@ export class TextObfuscationController {
             }
 
             if (!Array.isArray(eventData?.chat)) {
-                if (!eventData?.dryRun) this.settingsView?.setLastReport({ error: 'chat payload is unavailable', samples: [] });
+                if (!eventData?.dryRun) this.safeSetLastReport({ error: 'chat payload is unavailable', samples: [] });
                 return;
             }
 
             const report = transformChatInPlace(eventData.chat, matcher);
-            if (!eventData.dryRun) this.settingsView?.setLastReport(report);
+            if (!eventData.dryRun) this.safeSetLastReport(report);
         } catch (error) {
             // Never let an optional text transform break SillyTavern generation.
             console.error('[GG Unicode Sensitive Words] Transform failed; continuing with SillyTavern pipeline.', error);
-            if (!eventData?.dryRun) this.settingsView?.setLastReport({ error: String(error?.message ?? error), samples: [] });
+            if (!eventData?.dryRun) this.safeSetLastReport({ error: String(error?.message ?? error), samples: [] });
         }
     }
 }
