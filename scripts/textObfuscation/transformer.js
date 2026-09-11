@@ -116,6 +116,7 @@ function recordReplacement(report, match, transformed) {
 
 function transformText(text, matcher, report) {
     let changed = false;
+    matcher.regex.lastIndex = 0;
     const transformed = text.replace(matcher.regex, match => {
         const next = obfuscateMatch(match);
         if (next === match) return match;
