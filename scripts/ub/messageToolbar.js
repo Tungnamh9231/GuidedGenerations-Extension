@@ -14,6 +14,7 @@ import {
 
 const STYLE_ID = 'gg-native-ub-toolbar-style';
 const FIRST_MESSAGE_ATTR = 'data-gg-native-ub-first-message';
+const EDIT_PROXY_ATTR = 'data-gg-native-ub-edit-proxy';
 
 function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -36,9 +37,9 @@ function ensureStyles() {
         .gg-native-ub-button.gg-native-ub-disabled { opacity: .42; pointer-events: none; }
         .gg-native-ub-button.gg-native-ub-error { border-color: rgba(239,68,68,.55); }
         .gg-native-ub-button.gg-native-ub-error .gg-native-ub-badge { color: #ff7676; }
-        .gg-native-ub-extra-compact { display: inline-flex !important; align-items: center; }
         .gg-native-ub-first-message { display: inline-flex !important; align-items: center; gap: 3px; }
         .gg-native-ub-first-message .gg-native-ub-badge { font-size: 10px; font-weight: 750; line-height: 1; }
+        .gg-native-ub-menu-edit { display: inline-flex !important; align-items: center; }
 
         .gg-native-ub-state-list { display:flex; flex-direction:column; gap:6px; min-width:260px; max-height:min(70vh,560px); overflow-y:auto; }
         .gg-native-ub-state-btn { width:100%; text-align:left; }
@@ -194,7 +195,7 @@ export class MessageToolbarController {
         const stableMessageId = host.closest('.mes')?.getAttribute('mesid') ?? messageId;
 
         // All Native UB-owned message controls use UB_BUTTON_ATTR so refresh,
-        // disable and teardown remain deterministic. This includes the F button.
+        // disable and teardown remain deterministic. This includes F + Edit proxy.
         host.querySelectorAll(`[${UB_BUTTON_ATTR}]`).forEach(element => element.remove());
 
         const tabs = settings.tabs.filter(tab => tab.enabled);
@@ -203,25 +204,44 @@ export class MessageToolbarController {
             host.prepend(button);
         });
 
-        this.addFirstMessageButton(stableMessageId, host);
+        this.addActionMenuButtons(stableMessageId, host);
     }
 
-    addFirstMessageButton(messageId, host) {
+    addActionMenuButtons(messageId, host) {
         const extraButtons = host.querySelector('.extraMesButtons');
         if (!extraButtons) return;
 
-        const button = document.createElement('div');
-        button.className = 'mes_button st-btn-custom interactable gg-native-ub-first-message';
-        button.setAttribute(UB_BUTTON_ATTR, 'true');
-        button.setAttribute(FIRST_MESSAGE_ATTR, 'true');
-        button.title = 'Replace First Message with this message';
-        button.innerHTML = '<i class="fa-solid fa-quote-left"></i><span class="gg-native-ub-badge">F</span>';
-        button.addEventListener('click', event => {
+        const firstMessageButton = document.createElement('div');
+        firstMessageButton.className = 'mes_button st-btn-custom interactable gg-native-ub-first-message';
+        firstMessageButton.setAttribute(UB_BUTTON_ATTR, 'true');
+        firstMessageButton.setAttribute(FIRST_MESSAGE_ATTR, 'true');
+        firstMessageButton.title = 'Replace First Message with this message';
+        firstMessageButton.innerHTML = '<i class="fa-solid fa-quote-left"></i><span class="gg-native-ub-badge">F</span>';
+        firstMessageButton.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
             replaceFirstMessageFromMessage(messageId);
         });
-        extraButtons.prepend(button);
+        extraButtons.prepend(firstMessageButton);
+
+        // Keep SillyTavern's real .mes_edit node in its native location (hidden by
+        // compactMessageToolbar) and forward through a proxy in the ellipsis menu.
+        // This avoids reparenting native DOM that ST or other extensions may query.
+        const nativeEdit = host.querySelector('.mes_edit');
+        if (!nativeEdit || nativeEdit.hasAttribute(UB_BUTTON_ATTR)) return;
+
+        const editProxy = document.createElement('div');
+        editProxy.className = 'mes_button st-btn-custom interactable gg-native-ub-menu-edit fa-solid fa-pencil';
+        editProxy.setAttribute(UB_BUTTON_ATTR, 'true');
+        editProxy.setAttribute(EDIT_PROXY_ATTR, 'true');
+        editProxy.title = nativeEdit.getAttribute('title') || 'Edit';
+        editProxy.setAttribute('aria-label', 'Edit');
+        editProxy.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            nativeEdit.click();
+        });
+        extraButtons.append(editProxy);
     }
 
     createButton(tab, longPressMs) {
