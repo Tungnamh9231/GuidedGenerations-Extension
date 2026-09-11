@@ -1,6 +1,5 @@
 import { getContext } from '../../../../../extensions.js';
 import { GG_EXTENSION_NAME, UB_SETTINGS_ANCHOR_ID } from './constants.js';
-import { peekUbSettings } from './store.js';
 
 const QOL_SETTINGS_KEY = 'nativeUbQol';
 const STYLE_ID = 'gg-native-ub-qol-style';
@@ -55,15 +54,6 @@ export function saveMinorQolSettings(nextSettings) {
     extensionRoot[QOL_SETTINGS_KEY] = normalized;
     context.saveSettingsDebounced();
     return clone(normalized);
-}
-
-function isMasterEnabled() {
-    try {
-        return Boolean(peekUbSettings().enabled);
-    } catch (error) {
-        console.warn('[GG Native UB] Could not read UB master state for QOL guard.', error);
-        return false;
-    }
 }
 
 function ensureStyles() {
@@ -208,7 +198,7 @@ export class MinorQolController {
     }
 
     isSettingActive(settingKey) {
-        return Boolean(this.active && isMasterEnabled() && this.settings?.[settingKey]);
+        return Boolean(this.active && this.settings?.[settingKey]);
     }
 
     setSetting(settingKey, enabled) {
@@ -222,7 +212,7 @@ export class MinorQolController {
 
     handleDocumentClick(event) {
         const target = event.target instanceof Element ? event.target : null;
-        if (!target || !isMasterEnabled()) return;
+        if (!target) return;
 
         const newChatTrigger = target.closest('#option_start_new_chat');
         const deleteCharacterTrigger = target.closest('#delete_button');
@@ -289,7 +279,7 @@ export class MinorQolController {
 
         const newChat = createToggle(
             'Auto Xác Nhận Tạo Chat',
-            'Chỉ hoạt động khi Native UB Enabled đang bật. Tự tick “Also delete the current chat file” rồi bấm Yes/OK khi tạo chat mới.',
+            'Hoạt động độc lập với Native UB. Tự tick “Also delete the current chat file” rồi bấm Yes/OK khi tạo chat mới.',
         );
         newChat.input.className = 'gg-native-ub-auto-new-chat';
         newChat.input.checked = this.settings.autoConfirmNewChat;
@@ -299,7 +289,7 @@ export class MinorQolController {
 
         const deleteCharacter = createToggle(
             'Auto Xác Nhận Xóa NV',
-            'Chỉ hoạt động khi Native UB Enabled đang bật. Tự tick “Also delete the chat files” rồi bấm Yes/OK khi xóa nhân vật. Đây là thao tác xóa vĩnh viễn.',
+            'Hoạt động độc lập với Native UB. Tự tick “Also delete the chat files” rồi bấm Yes/OK khi xóa nhân vật. Đây là thao tác xóa vĩnh viễn.',
             'gg-native-ub-qol-danger',
         );
         deleteCharacter.input.className = 'gg-native-ub-auto-delete-char';
