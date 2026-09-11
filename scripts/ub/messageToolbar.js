@@ -6,12 +6,14 @@ import {
     getDisplayedMessageIds,
     getEventBus,
     getPopupApi,
+    getStContext,
     removeOwnedMessageButtons,
     resolveMessageToolbar,
     restoreCompactedMessageToolbars,
 } from './sillyTavernAdapter.js';
 
 const STYLE_ID = 'gg-native-ub-toolbar-style';
+const FIRST_MESSAGE_ATTR = 'data-gg-native-ub-first-message';
 
 function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -35,6 +37,8 @@ function ensureStyles() {
         .gg-native-ub-button.gg-native-ub-error { border-color: rgba(239,68,68,.55); }
         .gg-native-ub-button.gg-native-ub-error .gg-native-ub-badge { color: #ff7676; }
         .gg-native-ub-extra-compact { display: inline-flex !important; align-items: center; }
+        .gg-native-ub-first-message { display: inline-flex !important; align-items: center; gap: 3px; }
+        .gg-native-ub-first-message .gg-native-ub-badge { font-size: 10px; font-weight: 750; line-height: 1; }
 
         .gg-native-ub-state-list { display:flex; flex-direction:column; gap:6px; min-width:260px; max-height:min(70vh,560px); overflow-y:auto; }
         .gg-native-ub-state-btn { width:100%; text-align:left; }
@@ -55,6 +59,38 @@ function stateDisplay(tab, derived, lastValid) {
     if (derived.state === 'UNAVAILABLE') return 'N/A';
     if (derived.state === 'E') return lastValid ?? (tab.isDefault ? 'UB' : 'OFF');
     return derived.state;
+}
+
+function getRawMessageText(messageId) {
+    const context = getStContext();
+    const numericId = Number(messageId);
+    if (Number.isInteger(numericId) && numericId >= 0) {
+        const raw = context.chat?.[numericId]?.mes;
+        if (typeof raw === 'string') return raw;
+    }
+    return '';
+}
+
+function replaceFirstMessageFromMessage(messageId) {
+    const text = getRawMessageText(messageId);
+    if (!text) {
+        toast('warning', 'This message has no raw text to copy.');
+        return false;
+    }
+
+    const textarea = document.getElementById('firstmessage_textarea');
+    if (!(textarea instanceof HTMLTextAreaElement) && !(textarea instanceof HTMLInputElement)) {
+        toast('warning', 'Open the Character Creator/editor first.');
+        return false;
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(textarea), 'value');
+    if (descriptor?.set) descriptor.set.call(textarea, text);
+    else textarea.value = text;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    toast('success', 'First Message replaced from this message.');
+    return true;
 }
 
 export class MessageToolbarController {
@@ -87,7 +123,12 @@ export class MessageToolbarController {
         listen(eventTypes.MORE_MESSAGES_LOADED, () => this.renderAll());
         listen(eventTypes.CHAT_CHANGED, () => queueMicrotask(() => this.renderAll()));
 
-        listen(eventTypes.GENERATION_STARTED, () => {
+        // SillyTavern emits GENERATION_STARTED for dry runs as well. Core ST
+        // listeners explicitly ignore the third `isDryRun` argument. If we do
+        // not, a dry run can leave the toolbar permanently locked because it
+        // does not necessarily have a matching user-visible generation end.
+        listen(eventTypes.GENERATION_STARTED, (_type, _params, isDryRun) => {
+            if (isDryRun) return;
             this.generating = true;
             this.syncDisabledState();
         });
@@ -147,12 +188,35 @@ export class MessageToolbarController {
         const host = compactMessageToolbar(messageId) ?? resolveMessageToolbar(messageId);
         if (!host) return;
 
+        // All Native UB-owned message controls use UB_BUTTON_ATTR so refresh,
+        // disable and teardown remain deterministic. This includes the F button.
         host.querySelectorAll(`[${UB_BUTTON_ATTR}]`).forEach(element => element.remove());
+
         const tabs = settings.tabs.filter(tab => tab.enabled);
         [...tabs].reverse().forEach(tab => {
             const button = this.createButton(tab, settings.toolbar.longPressMs);
             host.prepend(button);
         });
+
+        this.addFirstMessageButton(messageId, host);
+    }
+
+    addFirstMessageButton(messageId, host) {
+        const extraButtons = host.querySelector('.extraMesButtons');
+        if (!extraButtons) return;
+
+        const button = document.createElement('div');
+        button.className = 'mes_button st-btn-custom interactable gg-native-ub-first-message';
+        button.setAttribute(UB_BUTTON_ATTR, 'true');
+        button.setAttribute(FIRST_MESSAGE_ATTR, 'true');
+        button.title = 'Replace First Message with this message';
+        button.innerHTML = '<i class="fa-solid fa-quote-left"></i><span class="gg-native-ub-badge">F</span>';
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            replaceFirstMessageFromMessage(messageId);
+        });
+        extraButtons.prepend(button);
     }
 
     createButton(tab, longPressMs) {
@@ -249,7 +313,7 @@ export class MessageToolbarController {
     }
 
     syncDisabledState() {
-        document.querySelectorAll(`[${UB_BUTTON_ATTR}]`).forEach(button => {
+        document.querySelectorAll(`[${UB_BUTTON_ATTR}][data-gg-ub-tab-id]`).forEach(button => {
             button.classList.toggle('gg-native-ub-disabled', this.generating || this.applying);
         });
     }
