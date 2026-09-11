@@ -15,6 +15,19 @@ function patternKey(pattern) {
     return String(pattern).toLowerCase();
 }
 
+function countOccurrences(value, needle) {
+    if (!needle) return 0;
+    let count = 0;
+    let cursor = 0;
+    while (cursor <= value.length - needle.length) {
+        const index = value.indexOf(needle, cursor);
+        if (index === -1) break;
+        count += 1;
+        cursor = index + needle.length;
+    }
+    return count;
+}
+
 function sanitizeRule(rule, index = 0) {
     if (!rule || typeof rule !== 'object') return null;
     const pattern = String(rule.pattern ?? rule.text ?? '').trim();
@@ -171,15 +184,18 @@ function createReport(matcher, protectedThrough) {
         matchedPatterns: 0,
         textBlocks: 0,
         protectedMessages: protectedThrough >= 0 ? protectedThrough + 1 : 0,
+        insertedMarkers: 0,
         samples: [],
         _matchedRuleIds: new Set(),
         _sampleKeys: new Set(),
+        _verificationBlocks: [],
     };
 }
 
 function recordReplacement(report, rule, match, transformed) {
     report.replacements += 1;
     report._matchedRuleIds.add(rule.id);
+    report.insertedMarkers += Math.max(0, countOccurrences(transformed, ZERO_WIDTH_SPACE) - countOccurrences(match, ZERO_WIDTH_SPACE));
 
     const sampleKey = `${rule.id}\u0000${match}\u0000${transformed}`;
     if (report.samples.length >= MAX_REPORT_SAMPLES || report._sampleKeys.has(sampleKey)) return;
@@ -189,6 +205,10 @@ function recordReplacement(report, rule, match, transformed) {
         before: match,
         after: escapeZeroWidthForDisplay(transformed),
     });
+}
+
+function recordVerificationBlock(report, transformedText) {
+    report._verificationBlocks.push(transformedText);
 }
 
 function transformWithRule(text, rule, report) {
@@ -232,6 +252,78 @@ function isMutableTextRole(message) {
     return role !== 'tool' && role !== 'function';
 }
 
+function collectSafePayloadText(messages) {
+    const textBlocks = [];
+    if (!Array.isArray(messages)) return textBlocks;
+
+    for (const message of messages) {
+        if (!message || typeof message !== 'object' || !isMutableTextRole(message)) continue;
+        const content = message.content;
+        if (typeof content === 'string') {
+            textBlocks.push(content);
+            continue;
+        }
+        if (!Array.isArray(content)) continue;
+        for (const block of content) {
+            if (!block || typeof block !== 'object' || block.type !== 'text' || typeof block.text !== 'string') continue;
+            textBlocks.push(block.text);
+        }
+    }
+    return textBlocks;
+}
+
+export function verifyFinalPayload(generateData, verificationPlan) {
+    const blocks = Array.isArray(verificationPlan?.blocks) ? verificationPlan.blocks : [];
+    if (!blocks.length) {
+        return {
+            status: 'not_needed',
+            expectedBlocks: 0,
+            matchedBlocks: 0,
+            expectedMarkers: 0,
+            observedMarkers: 0,
+            missingBlocks: 0,
+        };
+    }
+
+    const expectedBlocks = blocks.reduce((sum, block) => sum + (block.count ?? 0), 0);
+    if (!Array.isArray(generateData?.messages)) {
+        return {
+            status: 'unavailable',
+            reason: 'final payload messages are unavailable',
+            expectedBlocks,
+            matchedBlocks: 0,
+            expectedMarkers: verificationPlan.expectedMarkers ?? 0,
+            observedMarkers: 0,
+            missingBlocks: expectedBlocks,
+        };
+    }
+
+    const textBlocks = collectSafePayloadText(generateData.messages);
+    let matchedBlocks = 0;
+    let missingBlocks = 0;
+
+    for (const block of blocks) {
+        const expected = Math.max(0, Number(block.count) || 0);
+        const actual = textBlocks.reduce((sum, text) => sum + (text === block.text ? 1 : 0), 0);
+        matchedBlocks += Math.min(expected, actual);
+        missingBlocks += Math.max(0, expected - actual);
+    }
+
+    const expectedMarkers = Math.max(0, Number(verificationPlan.expectedMarkers) || 0);
+    const observedMarkers = textBlocks.reduce((sum, text) => sum + countOccurrences(text, ZERO_WIDTH_SPACE), 0);
+    const blocksPresent = missingBlocks === 0;
+    const markerFloorPresent = observedMarkers >= expectedMarkers;
+
+    return {
+        status: blocksPresent && markerFloorPresent ? 'verified' : 'failed',
+        expectedBlocks,
+        matchedBlocks,
+        expectedMarkers,
+        observedMarkers,
+        missingBlocks,
+    };
+}
+
 export function transformChatInPlace(chat, matcher) {
     const protectedThrough = findLastSignedMessageIndex(chat);
     const report = createReport(matcher, protectedThrough);
@@ -247,7 +339,10 @@ export function transformChatInPlace(chat, matcher) {
         const content = message.content;
         if (typeof content === 'string') {
             const transformed = transformText(content, matcher, report);
-            if (transformed !== content) stagedMessages.push([index, { ...message, content: transformed }]);
+            if (transformed !== content) {
+                recordVerificationBlock(report, transformed);
+                stagedMessages.push([index, { ...message, content: transformed }]);
+            }
             continue;
         }
 
@@ -261,6 +356,7 @@ export function transformChatInPlace(chat, matcher) {
             const transformed = transformText(block.text, matcher, report);
             if (transformed === block.text) continue;
 
+            recordVerificationBlock(report, transformed);
             if (!contentChanged) nextContent = content.slice();
             nextContent[blockIndex] = { ...block, text: transformed };
             contentChanged = true;
@@ -275,7 +371,14 @@ export function transformChatInPlace(chat, matcher) {
 
 function finalizeReport(report) {
     report.matchedPatterns = report._matchedRuleIds.size;
+    const blockCounts = new Map();
+    for (const text of report._verificationBlocks) blockCounts.set(text, (blockCounts.get(text) ?? 0) + 1);
+    report.verificationPlan = {
+        blocks: Array.from(blockCounts, ([text, count]) => ({ text, count })),
+        expectedMarkers: report.insertedMarkers,
+    };
     delete report._matchedRuleIds;
     delete report._sampleKeys;
+    delete report._verificationBlocks;
     return report;
 }
