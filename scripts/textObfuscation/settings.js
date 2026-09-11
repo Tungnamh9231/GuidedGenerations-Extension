@@ -6,9 +6,13 @@ const CONTROL_ATTR = 'data-gg-text-obfuscation-control';
 
 function uid() {
     try {
-        if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID();
+        if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
     } catch { /* fallback below */ }
     return `rule-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function patternKey(pattern) {
+    return String(pattern).toLowerCase();
 }
 
 function ensureStyles() {
@@ -185,8 +189,9 @@ export class TextObfuscationSettingsView {
         }
 
         const current = getTextObfuscationSettings();
-        if (current.rules.some(rule => rule.pattern === pattern)) {
-            globalThis.toastr?.warning?.('Pattern này đã tồn tại.');
+        const key = patternKey(pattern);
+        if (current.rules.some(rule => patternKey(rule.pattern) === key)) {
+            globalThis.toastr?.warning?.('Pattern này đã tồn tại (không phân biệt hoa/thường).');
             return;
         }
 
