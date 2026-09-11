@@ -115,8 +115,12 @@ export class MessageToolbarController {
         };
 
         const renderOne = id => {
-            this.renderMessage(id);
-            requestAnimationFrame(() => this.renderMessage(id));
+            const renderAndSync = () => {
+                this.renderMessage(id);
+                this.syncBadges();
+            };
+            renderAndSync();
+            requestAnimationFrame(renderAndSync);
         };
         listen(eventTypes.USER_MESSAGE_RENDERED, renderOne);
         listen(eventTypes.CHARACTER_MESSAGE_RENDERED, renderOne);
