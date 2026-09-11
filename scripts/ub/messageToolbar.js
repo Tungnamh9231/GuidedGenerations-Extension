@@ -1,15 +1,14 @@
-import {
-    DRAG_CANCEL_THRESHOLD,
-    UB_BUTTON_ATTR,
-} from './constants.js';
+import { DRAG_CANCEL_THRESHOLD, UB_BUTTON_ATTR } from './constants.js';
 import { cycleTabState, deriveTabState, getAvailableStates, applyTabState } from './engine.js';
 import { getUbSettings } from './store.js';
 import {
+    compactMessageToolbar,
     getDisplayedMessageIds,
     getEventBus,
     getPopupApi,
     removeOwnedMessageButtons,
     resolveMessageToolbar,
+    restoreCompactedMessageToolbars,
 } from './sillyTavernAdapter.js';
 
 const STYLE_ID = 'gg-native-ub-toolbar-style';
@@ -19,14 +18,28 @@ function ensureStyles() {
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-        .gg-native-ub-button { position: relative; gap: 3px; }
-        .gg-native-ub-button .gg-native-ub-badge { font-size: 10px; font-weight: 700; line-height: 1; margin-left: 2px; }
-        .gg-native-ub-button.gg-native-ub-disabled { opacity: .45; pointer-events: none; }
-        .gg-native-ub-button.gg-native-ub-error .gg-native-ub-badge { color: var(--SmartThemeQuoteColor, #ff7676); }
-        .gg-native-ub-state-list { display: flex; flex-direction: column; gap: 6px; min-width: 240px; }
-        .gg-native-ub-state-btn { width: 100%; text-align: left; }
-        .gg-native-ub-state-btn.active { outline: 1px solid var(--SmartThemeQuoteColor); }
-        .gg-native-ub-state-note { opacity: .7; font-size: 11px; margin-left: 6px; }
+        .gg-native-ub-button {
+            position: relative;
+            display: inline-flex !important;
+            align-items: center;
+            gap: 4px;
+            min-width: 40px;
+            padding-inline: 6px !important;
+            border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 38%, var(--SmartThemeBorderColor));
+            border-radius: 6px;
+            background: color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);
+        }
+        .gg-native-ub-button:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 15%, transparent); }
+        .gg-native-ub-button .gg-native-ub-badge { font-size: 10px; font-weight: 750; line-height: 1; }
+        .gg-native-ub-button.gg-native-ub-disabled { opacity: .42; pointer-events: none; }
+        .gg-native-ub-button.gg-native-ub-error { border-color: rgba(239,68,68,.55); }
+        .gg-native-ub-button.gg-native-ub-error .gg-native-ub-badge { color: #ff7676; }
+        .gg-native-ub-extra-compact { display: inline-flex !important; align-items: center; }
+
+        .gg-native-ub-state-list { display:flex; flex-direction:column; gap:6px; min-width:260px; max-height:min(70vh,560px); overflow-y:auto; }
+        .gg-native-ub-state-btn { width:100%; text-align:left; }
+        .gg-native-ub-state-btn.active { outline:1px solid var(--SmartThemeQuoteColor); }
+        .gg-native-ub-state-note { opacity:.7; font-size:11px; margin-left:6px; }
     `;
     document.head.appendChild(style);
 }
@@ -65,8 +78,12 @@ export class MessageToolbarController {
             this.listeners.push([event, fn]);
         };
 
-        listen(eventTypes.USER_MESSAGE_RENDERED, id => this.renderMessage(id));
-        listen(eventTypes.CHARACTER_MESSAGE_RENDERED, id => this.renderMessage(id));
+        const renderOne = id => {
+            this.renderMessage(id);
+            requestAnimationFrame(() => this.renderMessage(id));
+        };
+        listen(eventTypes.USER_MESSAGE_RENDERED, renderOne);
+        listen(eventTypes.CHARACTER_MESSAGE_RENDERED, renderOne);
         listen(eventTypes.MORE_MESSAGES_LOADED, () => this.renderAll());
         listen(eventTypes.CHAT_CHANGED, () => queueMicrotask(() => this.renderAll()));
 
@@ -82,13 +99,17 @@ export class MessageToolbarController {
         listen(eventTypes.GENERATION_STOPPED, generationEnded);
         listen(eventTypes.GENERATION_ENDED, generationEnded);
 
-        const sync = () => this.syncBadges();
+        const sync = () => {
+            this.renderAll();
+            this.syncBadges();
+        };
         listen(eventTypes.SETTINGS_UPDATED, sync);
         listen(eventTypes.OAI_PRESET_CHANGED_AFTER, sync);
         listen(eventTypes.CHATCOMPLETION_SOURCE_CHANGED, sync);
         listen(eventTypes.CHATCOMPLETION_MODEL_CHANGED, sync);
 
         this.renderAll();
+        requestAnimationFrame(() => this.renderAll());
     }
 
     destroy() {
@@ -98,10 +119,12 @@ export class MessageToolbarController {
         this.listeners = [];
         this.active = false;
         removeOwnedMessageButtons();
+        restoreCompactedMessageToolbars();
     }
 
     refresh() {
         removeOwnedMessageButtons();
+        restoreCompactedMessageToolbars();
         this.renderAll();
     }
 
@@ -109,8 +132,10 @@ export class MessageToolbarController {
         const settings = getUbSettings();
         if (!settings.enabled || !settings.toolbar.enabled) {
             removeOwnedMessageButtons();
+            restoreCompactedMessageToolbars();
             return;
         }
+
         for (const id of getDisplayedMessageIds()) this.renderMessage(id, settings);
         this.syncBadges(settings);
     }
@@ -119,21 +144,20 @@ export class MessageToolbarController {
         const settings = cachedSettings ?? getUbSettings();
         if (!settings.enabled || !settings.toolbar.enabled) return;
 
-        const host = resolveMessageToolbar(messageId);
+        const host = compactMessageToolbar(messageId) ?? resolveMessageToolbar(messageId);
         if (!host) return;
 
         host.querySelectorAll(`[${UB_BUTTON_ATTR}]`).forEach(element => element.remove());
-
         const tabs = settings.tabs.filter(tab => tab.enabled);
         [...tabs].reverse().forEach(tab => {
             const button = this.createButton(tab, settings.toolbar.longPressMs);
-            host.insertBefore(button, host.firstElementChild);
+            host.prepend(button);
         });
     }
 
     createButton(tab, longPressMs) {
         const button = document.createElement('div');
-        button.className = 'mes_button interactable gg-native-ub-button';
+        button.className = 'mes_button st-btn-custom interactable gg-native-ub-button';
         button.setAttribute(UB_BUTTON_ATTR, 'true');
         button.dataset.ggUbTabId = tab.id;
         button.title = `${tab.name}: click to cycle, hold to choose state`;
@@ -143,7 +167,6 @@ export class MessageToolbarController {
         let holdFired = false;
         let startX = 0;
         let startY = 0;
-
         const cancelHold = () => {
             if (timer) clearTimeout(timer);
             timer = null;
@@ -161,17 +184,12 @@ export class MessageToolbarController {
                 this.showStatePicker(tab.id);
             }, longPressMs);
         });
-
         button.addEventListener('pointermove', event => {
             if (!timer) return;
-            if (
-                Math.abs(event.clientX - startX) > DRAG_CANCEL_THRESHOLD
-                || Math.abs(event.clientY - startY) > DRAG_CANCEL_THRESHOLD
-            ) cancelHold();
+            if (Math.abs(event.clientX - startX) > DRAG_CANCEL_THRESHOLD || Math.abs(event.clientY - startY) > DRAG_CANCEL_THRESHOLD) cancelHold();
         });
         button.addEventListener('pointerup', cancelHold);
         button.addEventListener('pointercancel', cancelHold);
-
         button.addEventListener('click', async event => {
             event.preventDefault();
             event.stopPropagation();
@@ -182,7 +200,6 @@ export class MessageToolbarController {
             }
             await this.cycle(tab.id);
         });
-
         return button;
     }
 
@@ -226,11 +243,8 @@ export class MessageToolbarController {
 
     handleApplyError(tab, error) {
         console.error('[GG Native UB] Failed to apply state:', tab?.id, error);
-        if (error?.code === 'GG_UB_MISSING_PROMPTS') {
-            toast('error', `${tab.name}: configured prompt is missing from the active preset.`);
-        } else {
-            toast('error', `${tab?.name ?? 'UB'}: ${error?.message ?? 'Could not change state.'}`);
-        }
+        if (error?.code === 'GG_UB_MISSING_PROMPTS') toast('error', `${tab.name}: configured prompt is missing from the active preset.`);
+        else toast('error', `${tab?.name ?? 'UB'}: ${error?.message ?? 'Could not change state.'}`);
         this.syncBadges();
     }
 
@@ -243,12 +257,9 @@ export class MessageToolbarController {
     syncBadges(cachedSettings = null) {
         const settings = cachedSettings ?? getUbSettings();
         if (!settings.enabled) return;
-
         for (const tab of settings.tabs.filter(tab => tab.enabled)) {
             const derived = deriveTabState(tab);
-            if (!['E', 'MISSING', 'UNAVAILABLE'].includes(derived.state)) {
-                this.lastValidStates.set(tab.id, derived.state);
-            }
+            if (!['E', 'MISSING', 'UNAVAILABLE'].includes(derived.state)) this.lastValidStates.set(tab.id, derived.state);
             const display = stateDisplay(tab, derived, this.lastValidStates.get(tab.id));
             document.querySelectorAll(`[${UB_BUTTON_ATTR}][data-gg-ub-tab-id="${CSS.escape(tab.id)}"]`).forEach(button => {
                 const badge = button.querySelector('.gg-native-ub-badge');
@@ -265,14 +276,12 @@ export class MessageToolbarController {
     async showStatePicker(tabId) {
         const tab = this.findTab(tabId);
         if (!tab) return;
-
         const { Popup, POPUP_TYPE, POPUP_RESULT } = getPopupApi();
         if (!Popup || !POPUP_TYPE) return;
 
         const current = deriveTabState(tab).state;
         const root = document.createElement('div');
         root.className = 'gg-native-ub-state-list';
-
         let popup;
         for (const state of getAvailableStates(tab)) {
             const button = document.createElement('button');
@@ -282,7 +291,8 @@ export class MessageToolbarController {
                 ? Number(state.slice(3)) - 1
                 : (!tab.isDefault && state.startsWith(tab.name) ? Number(state.slice(tab.name.length)) - 1 : -1);
             const block = blockIndex >= 0 ? tab.blocks[blockIndex] : null;
-            button.textContent = block ? `${state} — ${block.name}` : state;
+            const groupTag = block?.promptRefs?.length > 1 ? ' [GROUP]' : '';
+            button.textContent = block ? `${state}${groupTag} — ${block.name}` : state;
             button.addEventListener('click', async () => {
                 await this.apply(tab.id, state);
                 if (popup?.complete) await popup.complete(POPUP_RESULT?.AFFIRMATIVE ?? 1);
@@ -290,10 +300,7 @@ export class MessageToolbarController {
             root.appendChild(button);
         }
 
-        popup = new Popup(root, POPUP_TYPE.DISPLAY, '', {
-            wide: false,
-            allowVerticalScrolling: true,
-        });
+        popup = new Popup(root, POPUP_TYPE.DISPLAY, '', { wide:false, allowVerticalScrolling:true });
         await popup.show();
     }
 }
