@@ -144,7 +144,6 @@ export class TextObfuscationController {
             delete report.verificationPlan;
             this.publishReport(report, verificationPlan);
         } catch (error) {
-            // Never let an optional text transform break SillyTavern generation.
             console.error('[GG Unicode Sensitive Words] Transform failed; continuing with SillyTavern pipeline.', error);
             if (!eventData?.dryRun) this.publishError(error);
         }
@@ -171,9 +170,15 @@ export class TextObfuscationController {
             if (!selected) return;
 
             this.pendingVerifications.splice(selected.index, 1);
+            const verification = {
+                ...selected.result,
+                expectedOccurrences: selected.result.expectedBlocks ?? 0,
+                matchedOccurrences: selected.result.matchedBlocks ?? 0,
+                missingOccurrences: selected.result.missingBlocks ?? 0,
+            };
             const nextReport = {
                 ...selected.pending.report,
-                verification: selected.result,
+                verification,
             };
             if (selected.pending.reportId === this.latestReportId) this.safeSetLastReport(nextReport);
         } catch (error) {
