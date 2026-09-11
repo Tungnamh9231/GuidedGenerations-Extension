@@ -22,6 +22,10 @@ function toBoolean(value, fallback = false) {
     return value == null ? fallback : Boolean(value);
 }
 
+function patternKey(pattern) {
+    return String(pattern).toLowerCase();
+}
+
 function sanitizeRule(rule, index) {
     if (!rule || typeof rule !== 'object') return null;
     const pattern = String(rule.pattern ?? rule.text ?? '').trim();
@@ -41,8 +45,9 @@ function legacyRules(source) {
     const rules = [];
     for (const rawLine of legacyText.split('\n')) {
         const pattern = rawLine.trim();
-        if (!pattern || pattern.includes(ZERO_WIDTH_SPACE) || seen.has(pattern)) continue;
-        seen.add(pattern);
+        const key = patternKey(pattern);
+        if (!pattern || pattern.includes(ZERO_WIDTH_SPACE) || seen.has(key)) continue;
+        seen.add(key);
         rules.push({
             id: `legacy-${rules.length + 1}`,
             pattern,
@@ -63,10 +68,11 @@ function normalize(settings) {
     const seen = new Set();
     const rules = [];
     for (const rule of sourceRules) {
-        // Exact duplicate text would be ambiguous because the first matching rule
-        // inserts U+200B and prevents a later duplicate from matching predictably.
-        if (seen.has(rule.pattern)) continue;
-        seen.add(rule.pattern);
+        // Case variants share one rule. Casing behavior belongs to the rule's
+        // Case sensitive option; allowing both would create order-dependent matches.
+        const key = patternKey(rule.pattern);
+        if (seen.has(key)) continue;
+        seen.add(key);
         rules.push(rule);
     }
 
