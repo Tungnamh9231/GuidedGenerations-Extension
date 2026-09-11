@@ -88,13 +88,18 @@ function ensureStyles() {
     document.head.appendChild(style);
 }
 
+function isPopupOpen(popup) {
+    if (!(popup instanceof HTMLElement)) return false;
+    if ('open' in popup) return Boolean(popup.open);
+    return popup.hasAttribute('open') || popup.style.display !== 'none';
+}
+
 function findActivePopupCheckbox(id) {
     const escaped = CSS.escape(id);
     for (const checkbox of document.querySelectorAll(`#${escaped}`)) {
         if (!(checkbox instanceof HTMLInputElement)) continue;
         const popup = checkbox.closest('.popup');
-        if (!(popup instanceof HTMLDialogElement)) continue;
-        if (popup.open) return checkbox;
+        if (isPopupOpen(popup)) return checkbox;
     }
     return null;
 }
@@ -206,13 +211,13 @@ export class MinorQolController {
             if (!getMinorQolSettings()[settingKey]) return;
 
             const popup = checkbox.closest('.popup');
-            if (!(popup instanceof HTMLDialogElement) || !popup.open) return;
+            if (!isPopupOpen(popup)) return;
 
             // Match the original userscript behavior: tick the destructive-option
             // checkbox first, then confirm the exact popup that owns it.
             setChecked(checkbox, true);
             await nextFrame();
-            if (!getMinorQolSettings()[settingKey] || !popup.open) return;
+            if (!getMinorQolSettings()[settingKey] || !isPopupOpen(popup)) return;
 
             const confirmButton = popup.querySelector('.popup-button-ok');
             if (!(confirmButton instanceof HTMLElement)) return;
