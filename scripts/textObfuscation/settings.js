@@ -38,6 +38,7 @@ function ensureStyles() {
         #${SETTINGS_SECTION_ID} .gg-text-rule-option input { width:15px; height:15px; }
         #${SETTINGS_SECTION_ID} .gg-text-rule-preview { opacity:.7; font:9px/1.4 var(--monoFontFamily, monospace); overflow-wrap:anywhere; }
         #${SETTINGS_SECTION_ID} .gg-text-obfuscation-meta, #${SETTINGS_SECTION_ID} .gg-text-obfuscation-status { opacity:.72; font-size:10px; line-height:1.45; }
+        #${SETTINGS_SECTION_ID} .gg-text-obfuscation-status { white-space:pre-line; }
         #${SETTINGS_SECTION_ID} .gg-text-obfuscation-status.is-ok { opacity:.9; }
         #${SETTINGS_SECTION_ID} .gg-text-obfuscation-status.is-warn { color:#f6c453; opacity:.95; }
         #${SETTINGS_SECTION_ID} .gg-text-obfuscation-samples { display:flex; flex-wrap:wrap; gap:5px; }
@@ -83,6 +84,23 @@ function createRuleToggle(labelText, title, checked, onChange) {
     input.addEventListener('change', () => onChange(input.checked));
     label.append(input, text);
     return label;
+}
+
+function describeVerification(verification) {
+    switch (verification?.status) {
+        case 'verified':
+            return `Final ST payload: ✓ verified · ${verification.matchedOccurrences}/${verification.expectedOccurrences} transformed occurrence(s) present · ${verification.observedMarkers} U+200B observed.`;
+        case 'failed':
+            return `Final ST payload: ⚠ verification failed · ${verification.matchedOccurrences}/${verification.expectedOccurrences} transformed occurrence(s) found · ${verification.missingOccurrences} missing.`;
+        case 'pending':
+            return `Final ST payload: … waiting for CHAT_COMPLETION_SETTINGS_READY (${verification.expectedOccurrences ?? 0} transformed occurrence(s) expected).`;
+        case 'unavailable':
+            return `Final ST payload: ? verification unavailable${verification.reason ? ` (${verification.reason})` : ''}.`;
+        case 'not_needed':
+            return 'Final ST payload: — no transformed occurrence to verify.';
+        default:
+            return 'Final ST payload: ? verification state unavailable.';
+    }
 }
 
 export class TextObfuscationSettingsView {
@@ -292,7 +310,7 @@ export class TextObfuscationSettingsView {
         const settings = getTextObfuscationSettings();
         this.enabledInput.checked = settings.enabled;
         this.renderRules(settings.rules);
-        this.meta.textContent = `${settings.rules.length} rule(s) · longest phrase first · U+200B · options are independent per rule`;
+        this.meta.textContent = `${settings.rules.length} rule(s) · longest phrase first · U+200B · final-payload verification enabled`;
 
         this.status.className = 'gg-text-obfuscation-status';
         this.samples.replaceChildren();
@@ -311,15 +329,23 @@ export class TextObfuscationSettingsView {
         }
         if (this.lastReport.error) {
             this.status.classList.add('is-warn');
-            this.status.textContent = `Last request: transformer bỏ qua do lỗi (${this.lastReport.error}). Request gốc không bị chặn.`;
+            this.status.textContent = `Last transform: transformer bỏ qua do lỗi (${this.lastReport.error}). Request gốc không bị chặn.`;
             return;
         }
 
         const protectedText = this.lastReport.protectedMessages
             ? ` · ${this.lastReport.protectedMessages} signed-prefix message(s) protected`
             : '';
-        this.status.classList.add(this.lastReport.replacements > 0 ? 'is-ok' : 'is-warn');
-        this.status.textContent = `Last request: ${this.lastReport.replacements} replacement(s) · ${this.lastReport.matchedPatterns} matched rule(s) · ${this.lastReport.textBlocks} text block(s)${protectedText}`;
+        const verification = this.lastReport.verification;
+        const verificationBad = verification?.status === 'failed' || verification?.status === 'unavailable';
+        if (verification?.status === 'verified') this.status.classList.add('is-ok');
+        else if (verificationBad || this.lastReport.replacements === 0) this.status.classList.add('is-warn');
+
+        const transformLine = `Last transform: ${this.lastReport.replacements} replacement(s) · ${this.lastReport.matchedPatterns} matched rule(s) · ${this.lastReport.textBlocks} text block(s)${protectedText}`;
+        const verificationLine = describeVerification(verification);
+        const dispatchLine = 'Network dispatch: not intercepted · verification stops at SillyTavern final payload stage before the normal fetch path.';
+        this.status.textContent = `${transformLine}\n${verificationLine}\n${dispatchLine}`;
+
         for (const sample of this.lastReport.samples ?? []) {
             const prefix = sample.pattern ? `${sample.pattern}: ` : '';
             this.samples.appendChild(createPill(`${prefix}${sample.before} → ${sample.after}`));
