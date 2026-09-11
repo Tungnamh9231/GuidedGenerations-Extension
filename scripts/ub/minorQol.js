@@ -1,5 +1,6 @@
 import { getContext } from '../../../../../extensions.js';
 import { GG_EXTENSION_NAME, UB_SETTINGS_ANCHOR_ID } from './constants.js';
+import { peekUbSettings } from './store.js';
 
 const QOL_SETTINGS_KEY = 'nativeUbQol';
 const STYLE_ID = 'gg-native-ub-qol-style';
@@ -17,11 +18,20 @@ function clone(value) {
         : JSON.parse(JSON.stringify(value));
 }
 
+function toBoolean(value, fallback = false) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        if (value.toLowerCase() === 'true') return true;
+        if (value.toLowerCase() === 'false') return false;
+    }
+    return value == null ? fallback : Boolean(value);
+}
+
 function normalize(settings) {
     const source = settings && typeof settings === 'object' ? settings : {};
     return {
-        autoConfirmNewChat: Boolean(source.autoConfirmNewChat ?? DEFAULTS.autoConfirmNewChat),
-        autoConfirmDeleteCharacter: Boolean(source.autoConfirmDeleteCharacter ?? DEFAULTS.autoConfirmDeleteCharacter),
+        autoConfirmNewChat: toBoolean(source.autoConfirmNewChat, DEFAULTS.autoConfirmNewChat),
+        autoConfirmDeleteCharacter: toBoolean(source.autoConfirmDeleteCharacter, DEFAULTS.autoConfirmDeleteCharacter),
     };
 }
 
@@ -45,6 +55,15 @@ export function saveMinorQolSettings(nextSettings) {
     extensionRoot[QOL_SETTINGS_KEY] = normalized;
     context.saveSettingsDebounced();
     return clone(normalized);
+}
+
+function isMasterEnabled() {
+    try {
+        return Boolean(peekUbSettings().enabled);
+    } catch (error) {
+        console.warn('[GG Native UB] Could not read UB master state for QOL guard.', error);
+        return false;
+    }
 }
 
 function ensureStyles() {
@@ -104,32 +123,35 @@ function findActivePopupCheckbox(id) {
     return null;
 }
 
-function waitForActivePopupCheckbox(id, timeoutMs = POPUP_WAIT_MS) {
+function waitForActivePopupCheckbox(id, signal, timeoutMs = POPUP_WAIT_MS) {
+    if (signal?.aborted) return Promise.resolve(null);
     const immediate = findActivePopupCheckbox(id);
     if (immediate) return Promise.resolve(immediate);
 
     return new Promise(resolve => {
         let timer = null;
-        const observer = new MutationObserver(() => {
-            const checkbox = findActivePopupCheckbox(id);
-            if (!checkbox) return;
-            cleanup();
-            resolve(checkbox);
-        });
-        const cleanup = () => {
+        let settled = false;
+        const finish = value => {
+            if (settled) return;
+            settled = true;
             observer.disconnect();
             if (timer) clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            resolve(value);
         };
+        const observer = new MutationObserver(() => {
+            const checkbox = findActivePopupCheckbox(id);
+            if (checkbox) finish(checkbox);
+        });
+        const onAbort = () => finish(null);
         observer.observe(document.body, {
             childList: true,
             subtree: true,
             attributes: true,
             attributeFilter: ['open'],
         });
-        timer = setTimeout(() => {
-            cleanup();
-            resolve(null);
-        }, timeoutMs);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        timer = setTimeout(() => finish(null), timeoutMs);
     });
 }
 
@@ -162,14 +184,15 @@ function createToggle(labelText, title, className = '') {
 export class MinorQolController {
     constructor() {
         this.active = false;
-        this.pending = new Set();
+        this.settings = clone(DEFAULTS);
+        this.pending = new Map();
         this.handleDocumentClick = this.handleDocumentClick.bind(this);
     }
 
     init() {
         if (this.active) return;
+        this.settings = getMinorQolSettings();
         this.active = true;
-        getMinorQolSettings();
         document.body.addEventListener('click', this.handleDocumentClick, true);
         ensureStyles();
     }
@@ -177,54 +200,73 @@ export class MinorQolController {
     destroy() {
         if (!this.active) return;
         document.body.removeEventListener('click', this.handleDocumentClick, true);
+        for (const controller of this.pending.values()) controller.abort();
         this.pending.clear();
         this.active = false;
         document.querySelectorAll(`[${CONTROL_ATTR}]`).forEach(element => element.remove());
         document.getElementById(STYLE_ID)?.remove();
     }
 
+    isSettingActive(settingKey) {
+        return Boolean(this.active && isMasterEnabled() && this.settings?.[settingKey]);
+    }
+
+    setSetting(settingKey, enabled) {
+        this.settings[settingKey] = Boolean(enabled);
+        saveMinorQolSettings(this.settings);
+        if (!enabled) {
+            this.pending.get(settingKey)?.abort();
+            this.pending.delete(settingKey);
+        }
+    }
+
     handleDocumentClick(event) {
         const target = event.target instanceof Element ? event.target : null;
-        if (!target) return;
+        if (!target || !isMasterEnabled()) return;
 
         const newChatTrigger = target.closest('#option_start_new_chat');
         const deleteCharacterTrigger = target.closest('#delete_button');
         if (!newChatTrigger && !deleteCharacterTrigger) return;
 
-        const settings = getMinorQolSettings();
-        if (newChatTrigger && settings.autoConfirmNewChat) {
+        if (newChatTrigger && this.isSettingActive('autoConfirmNewChat')) {
             void this.autoTickAndConfirm('del_chat_checkbox', 'autoConfirmNewChat');
             return;
         }
 
-        if (deleteCharacterTrigger && settings.autoConfirmDeleteCharacter) {
+        if (deleteCharacterTrigger && this.isSettingActive('autoConfirmDeleteCharacter')) {
             void this.autoTickAndConfirm('del_char_checkbox', 'autoConfirmDeleteCharacter');
         }
     }
 
     async autoTickAndConfirm(checkboxId, settingKey) {
-        if (this.pending.has(checkboxId)) return;
-        this.pending.add(checkboxId);
+        if (!this.isSettingActive(settingKey) || this.pending.has(settingKey)) return;
+
+        const abortController = new AbortController();
+        this.pending.set(settingKey, abortController);
+        let checkbox = null;
+        let wasChecked = null;
         try {
-            const checkbox = await waitForActivePopupCheckbox(checkboxId);
-            if (!checkbox) return;
-            if (!getMinorQolSettings()[settingKey]) return;
+            checkbox = await waitForActivePopupCheckbox(checkboxId, abortController.signal);
+            if (!checkbox || !this.isSettingActive(settingKey)) return;
 
             const popup = checkbox.closest('.popup');
             if (!isPopupOpen(popup)) return;
 
-            // Match the original userscript behavior: tick the destructive-option
-            // checkbox first, then confirm the exact popup that owns it.
+            wasChecked = checkbox.checked;
             setChecked(checkbox, true);
             await nextFrame();
-            if (!getMinorQolSettings()[settingKey] || !isPopupOpen(popup)) return;
+
+            if (!this.isSettingActive(settingKey) || abortController.signal.aborted || !isPopupOpen(popup)) {
+                if (wasChecked !== null) setChecked(checkbox, wasChecked);
+                return;
+            }
 
             const confirmButton = popup.querySelector('.popup-button-ok');
             if (!(confirmButton instanceof HTMLElement)) return;
             if (confirmButton.matches(':disabled, [aria-disabled="true"]')) return;
             confirmButton.click();
         } finally {
-            this.pending.delete(checkboxId);
+            if (this.pending.get(settingKey) === abortController) this.pending.delete(settingKey);
         }
     }
 
@@ -234,12 +276,11 @@ export class MinorQolController {
         const actions = section?.querySelector('.gg-native-ub-card-actions');
         if (!actions) return false;
 
-        const current = getMinorQolSettings();
         const existingNewChat = actions.querySelector('.gg-native-ub-auto-new-chat');
         const existingDelete = actions.querySelector('.gg-native-ub-auto-delete-char');
         if (existingNewChat && existingDelete) {
-            existingNewChat.checked = current.autoConfirmNewChat;
-            existingDelete.checked = current.autoConfirmDeleteCharacter;
+            existingNewChat.checked = this.settings.autoConfirmNewChat;
+            existingDelete.checked = this.settings.autoConfirmDeleteCharacter;
             return true;
         }
 
@@ -248,27 +289,23 @@ export class MinorQolController {
 
         const newChat = createToggle(
             'Auto Xác Nhận Tạo Chat',
-            'Tự tick “Also delete the current chat file” rồi bấm Yes/OK khi tạo chat mới.',
+            'Chỉ hoạt động khi Native UB Enabled đang bật. Tự tick “Also delete the current chat file” rồi bấm Yes/OK khi tạo chat mới.',
         );
         newChat.input.className = 'gg-native-ub-auto-new-chat';
-        newChat.input.checked = current.autoConfirmNewChat;
+        newChat.input.checked = this.settings.autoConfirmNewChat;
         newChat.input.addEventListener('change', () => {
-            const settings = getMinorQolSettings();
-            settings.autoConfirmNewChat = newChat.input.checked;
-            saveMinorQolSettings(settings);
+            this.setSetting('autoConfirmNewChat', newChat.input.checked);
         });
 
         const deleteCharacter = createToggle(
             'Auto Xác Nhận Xóa NV',
-            'Tự tick “Also delete the chat files” rồi bấm Yes/OK khi xóa nhân vật. Đây là thao tác xóa vĩnh viễn.',
+            'Chỉ hoạt động khi Native UB Enabled đang bật. Tự tick “Also delete the chat files” rồi bấm Yes/OK khi xóa nhân vật. Đây là thao tác xóa vĩnh viễn.',
             'gg-native-ub-qol-danger',
         );
         deleteCharacter.input.className = 'gg-native-ub-auto-delete-char';
-        deleteCharacter.input.checked = current.autoConfirmDeleteCharacter;
+        deleteCharacter.input.checked = this.settings.autoConfirmDeleteCharacter;
         deleteCharacter.input.addEventListener('change', () => {
-            const settings = getMinorQolSettings();
-            settings.autoConfirmDeleteCharacter = deleteCharacter.input.checked;
-            saveMinorQolSettings(settings);
+            this.setSetting('autoConfirmDeleteCharacter', deleteCharacter.input.checked);
         });
 
         if (configureButton) {
