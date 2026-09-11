@@ -50,7 +50,7 @@ export class TextObfuscationController {
             const settings = peekTextObfuscationSettings();
             if (!settings.enabled) return;
 
-            const matcher = buildMatcher(settings.patternsText);
+            const matcher = buildMatcher(settings.rules);
             if (!matcher) {
                 if (!eventData?.dryRun) {
                     this.safeSetLastReport({
