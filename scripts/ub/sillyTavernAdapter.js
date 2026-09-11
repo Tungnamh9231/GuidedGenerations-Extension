@@ -74,6 +74,7 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
     if (missing.length) return { changed: false, missing, unavailable: false };
 
     let changed = false;
+    const previous = resolved.map(({ entry }) => ({ entry, enabled: Boolean(entry.enabled) }));
     for (const { entry, enabled } of resolved) {
         if (Boolean(entry.enabled) !== enabled) {
             entry.enabled = enabled;
@@ -83,7 +84,15 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
 
     if (changed) {
         promptManager.render();
-        await promptManager.saveServiceSettings();
+        try {
+            await promptManager.saveServiceSettings();
+        } catch (error) {
+            // Restore in-memory state as well as the rendered Prompt Manager if
+            // persistence fails, so callers never observe a half-applied state.
+            for (const item of previous) item.entry.enabled = item.enabled;
+            promptManager.render();
+            throw error;
+        }
     }
 
     return { changed, missing: [], unavailable: false };
