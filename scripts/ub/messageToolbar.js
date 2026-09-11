@@ -187,6 +187,7 @@ export class MessageToolbarController {
 
         const host = compactMessageToolbar(messageId) ?? resolveMessageToolbar(messageId);
         if (!host) return;
+        const stableMessageId = host.closest('.mes')?.getAttribute('mesid') ?? messageId;
 
         // All Native UB-owned message controls use UB_BUTTON_ATTR so refresh,
         // disable and teardown remain deterministic. This includes the F button.
@@ -198,7 +199,7 @@ export class MessageToolbarController {
             host.prepend(button);
         });
 
-        this.addFirstMessageButton(messageId, host);
+        this.addFirstMessageButton(stableMessageId, host);
     }
 
     addFirstMessageButton(messageId, host) {
