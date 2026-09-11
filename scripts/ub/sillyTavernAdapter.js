@@ -5,6 +5,12 @@ import { EFFORT_VALUES, UB_BUTTON_ATTR } from './constants.js';
 const HIDDEN_EXTRA_ATTR = 'data-gg-native-ub-hidden-extra';
 const PREV_DISPLAY_ATTR = 'data-gg-native-ub-prev-display';
 const PREV_PRIORITY_ATTR = 'data-gg-native-ub-prev-display-priority';
+const COMPACT_EXTRA_ATTR = 'data-gg-native-ub-forced-extra';
+const COMPACT_PREV_DISPLAY_ATTR = 'data-gg-native-ub-extra-prev-display';
+const COMPACT_PREV_DISPLAY_PRIORITY_ATTR = 'data-gg-native-ub-extra-prev-display-priority';
+const COMPACT_PREV_OPACITY_ATTR = 'data-gg-native-ub-extra-prev-opacity';
+const COMPACT_PREV_OPACITY_PRIORITY_ATTR = 'data-gg-native-ub-extra-prev-opacity-priority';
+const COMPACT_PREV_VISIBLE_ATTR = 'data-gg-native-ub-extra-prev-visible';
 
 const VALID_EFFORTS = new Set([
     reasoning_effort_types?.min ?? 'min',
@@ -251,6 +257,50 @@ function hideElementDisplay(element) {
     element.style.setProperty('display', 'none', 'important');
 }
 
+function forceCompactExtraButtons(element) {
+    if (!(element instanceof Element)) return;
+    if (!element.hasAttribute(COMPACT_EXTRA_ATTR)) {
+        element.setAttribute(COMPACT_PREV_DISPLAY_ATTR, element.style.getPropertyValue('display') || '');
+        element.setAttribute(COMPACT_PREV_DISPLAY_PRIORITY_ATTR, element.style.getPropertyPriority('display') || '');
+        element.setAttribute(COMPACT_PREV_OPACITY_ATTR, element.style.getPropertyValue('opacity') || '');
+        element.setAttribute(COMPACT_PREV_OPACITY_PRIORITY_ATTR, element.style.getPropertyPriority('opacity') || '');
+        element.setAttribute(COMPACT_PREV_VISIBLE_ATTR, element.classList.contains('visible') ? 'true' : 'false');
+        element.setAttribute(COMPACT_EXTRA_ATTR, 'true');
+    }
+
+    // SillyTavern's ellipsis handler marks this container as `.visible`, and its
+    // document-level click handler later hides every `.extraMesButtons.visible`.
+    // Compact mode must therefore detach from that native open/close state.
+    element.classList.remove('visible');
+    element.style.setProperty('display', 'inline-flex', 'important');
+    element.style.setProperty('opacity', '1', 'important');
+}
+
+function restoreCompactExtraButtons(element) {
+    if (!(element instanceof Element) || !element.hasAttribute(COMPACT_EXTRA_ATTR)) return;
+
+    const previousDisplay = element.getAttribute(COMPACT_PREV_DISPLAY_ATTR) ?? '';
+    const previousDisplayPriority = element.getAttribute(COMPACT_PREV_DISPLAY_PRIORITY_ATTR) ?? '';
+    const previousOpacity = element.getAttribute(COMPACT_PREV_OPACITY_ATTR) ?? '';
+    const previousOpacityPriority = element.getAttribute(COMPACT_PREV_OPACITY_PRIORITY_ATTR) ?? '';
+    const wasVisible = element.getAttribute(COMPACT_PREV_VISIBLE_ATTR) === 'true';
+
+    element.classList.remove('gg-native-ub-extra-compact');
+    element.classList.toggle('visible', wasVisible);
+
+    if (previousDisplay) element.style.setProperty('display', previousDisplay, previousDisplayPriority);
+    else element.style.removeProperty('display');
+    if (previousOpacity) element.style.setProperty('opacity', previousOpacity, previousOpacityPriority);
+    else element.style.removeProperty('opacity');
+
+    element.removeAttribute(COMPACT_EXTRA_ATTR);
+    element.removeAttribute(COMPACT_PREV_DISPLAY_ATTR);
+    element.removeAttribute(COMPACT_PREV_DISPLAY_PRIORITY_ATTR);
+    element.removeAttribute(COMPACT_PREV_OPACITY_ATTR);
+    element.removeAttribute(COMPACT_PREV_OPACITY_PRIORITY_ATTR);
+    element.removeAttribute(COMPACT_PREV_VISIBLE_ATTR);
+}
+
 /**
  * Reproduce the userscript's compact toolbar layout without destroying native
  * nodes: all extra message actions are hidden except Copy, and can be restored
@@ -267,6 +317,11 @@ export function compactMessageToolbar(messageId) {
     const extraButtons = mesButtons.querySelector('.extraMesButtons');
     if (!extraButtons) return mesButtons;
 
+    // Normalize the extra-action container every time compact mode is entered.
+    // This makes `UB off -> open ... -> UB on` identical to a fresh UB-on state.
+    extraButtons.classList.add('gg-native-ub-extra-compact');
+    forceCompactExtraButtons(extraButtons);
+
     const extraButtonsHint = mesButtons.querySelector('.extraMesButtonsHint');
     if (extraButtonsHint) hideElementDisplay(extraButtonsHint);
 
@@ -279,11 +334,11 @@ export function compactMessageToolbar(messageId) {
         hideElementDisplay(child);
     }
 
-    extraButtons.classList.add('gg-native-ub-extra-compact');
     return mesButtons;
 }
 
 export function restoreCompactedMessageToolbars() {
+    document.querySelectorAll(`[${COMPACT_EXTRA_ATTR}]`).forEach(restoreCompactExtraButtons);
     document.querySelectorAll(`[${HIDDEN_EXTRA_ATTR}]`).forEach(restoreElementDisplay);
     document.querySelectorAll('.gg-native-ub-extra-compact').forEach(element => element.classList.remove('gg-native-ub-extra-compact'));
 }
