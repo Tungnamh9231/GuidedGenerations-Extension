@@ -93,9 +93,11 @@ export class TextObfuscationController {
                 reason: 'verification plan is empty',
             };
         } else {
+            const expectedBlocks = verificationPlan.blocks.reduce((sum, block) => sum + (block.count ?? 0), 0);
             publicReport.verification = {
                 status: 'pending',
-                expectedBlocks: verificationPlan.blocks.reduce((sum, block) => sum + (block.count ?? 0), 0),
+                expectedBlocks,
+                expectedOccurrences: expectedBlocks,
                 expectedMarkers: verificationPlan.expectedMarkers ?? 0,
             };
             this.pendingVerifications.push({
@@ -149,14 +151,8 @@ export class TextObfuscationController {
     }
 
     handleSettingsReady(generateData) {
-        // Defer one task so every CHAT_COMPLETION_SETTINGS_READY listener gets a chance
-        // to finish mutating the same generateData object before we verify it.
-        setTimeout(() => this.verifySettingsPayload(generateData), 0);
-    }
-
-    verifySettingsPayload(generateData) {
         try {
-            if (!this.active || !this.pendingVerifications.length) return;
+            if (!this.pendingVerifications.length) return;
 
             const candidates = this.pendingVerifications.map((pending, index) => ({
                 index,
@@ -164,8 +160,6 @@ export class TextObfuscationController {
                 result: verifyFinalPayload(generateData, pending.plan),
             }));
 
-            // A positive block match is a stronger correlation signal than queue order
-            // if two extension-driven generations ever overlap.
             let selected = candidates.find(candidate => candidate.result.status === 'verified');
             if (!selected) {
                 const ranked = candidates
