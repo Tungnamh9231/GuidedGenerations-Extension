@@ -47,6 +47,7 @@ function stateDisplay(tab, derived, lastValid) {
 export class MessageToolbarController {
     constructor() {
         this.generating = false;
+        this.applying = false;
         this.lastValidStates = new Map();
         this.listeners = [];
         this.active = false;
@@ -149,7 +150,7 @@ export class MessageToolbarController {
         };
 
         button.addEventListener('pointerdown', event => {
-            if (this.generating) return;
+            if (this.generating || this.applying) return;
             if (event.pointerType === 'mouse' && event.button !== 0) return;
             holdFired = false;
             startX = event.clientX;
@@ -174,7 +175,7 @@ export class MessageToolbarController {
         button.addEventListener('click', async event => {
             event.preventDefault();
             event.stopPropagation();
-            if (this.generating) return;
+            if (this.generating || this.applying) return;
             if (holdFired) {
                 holdFired = false;
                 return;
@@ -191,25 +192,35 @@ export class MessageToolbarController {
 
     async cycle(tabId) {
         const tab = this.findTab(tabId);
-        if (!tab) return;
+        if (!tab || this.applying) return;
+        this.applying = true;
+        this.syncDisabledState();
         try {
             const result = await cycleTabState(tab, this.lastValidStates.get(tabId));
             if (result?.state) this.lastValidStates.set(tabId, result.state);
-            this.syncBadges();
         } catch (error) {
             this.handleApplyError(tab, error);
+        } finally {
+            this.applying = false;
+            this.syncDisabledState();
+            this.syncBadges();
         }
     }
 
     async apply(tabId, state) {
         const tab = this.findTab(tabId);
-        if (!tab) return;
+        if (!tab || this.applying) return;
+        this.applying = true;
+        this.syncDisabledState();
         try {
             await applyTabState(tab, state);
             this.lastValidStates.set(tabId, state);
-            this.syncBadges();
         } catch (error) {
             this.handleApplyError(tab, error);
+        } finally {
+            this.applying = false;
+            this.syncDisabledState();
+            this.syncBadges();
         }
     }
 
@@ -225,7 +236,7 @@ export class MessageToolbarController {
 
     syncDisabledState() {
         document.querySelectorAll(`[${UB_BUTTON_ATTR}]`).forEach(button => {
-            button.classList.toggle('gg-native-ub-disabled', this.generating);
+            button.classList.toggle('gg-native-ub-disabled', this.generating || this.applying);
         });
     }
 
@@ -243,7 +254,7 @@ export class MessageToolbarController {
                 const badge = button.querySelector('.gg-native-ub-badge');
                 if (badge) badge.textContent = display;
                 button.classList.toggle('gg-native-ub-error', ['MISSING', 'UNAVAILABLE'].includes(derived.state));
-                button.classList.toggle('gg-native-ub-disabled', this.generating);
+                button.classList.toggle('gg-native-ub-disabled', this.generating || this.applying);
                 button.title = derived.state === 'MISSING'
                     ? `${tab.name}: one or more configured prompts are missing`
                     : `${tab.name}: ${derived.state} — click to cycle, hold to choose state`;
