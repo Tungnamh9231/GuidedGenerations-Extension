@@ -11,6 +11,10 @@ function codePointLength(value) {
     return Array.from(value).length;
 }
 
+function patternKey(pattern) {
+    return String(pattern).toLowerCase();
+}
+
 function sanitizeRule(rule, index = 0) {
     if (!rule || typeof rule !== 'object') return null;
     const pattern = String(rule.pattern ?? rule.text ?? '').trim();
@@ -30,8 +34,10 @@ export function normalizeRules(rules) {
     const normalized = [];
     for (let index = 0; index < rules.length; index += 1) {
         const rule = sanitizeRule(rules[index], index);
-        if (!rule || seen.has(rule.pattern)) continue;
-        seen.add(rule.pattern);
+        if (!rule) continue;
+        const key = patternKey(rule.pattern);
+        if (seen.has(key)) continue;
+        seen.add(key);
         normalized.push({ ...rule, _order: index });
     }
     normalized.sort((a, b) => {
