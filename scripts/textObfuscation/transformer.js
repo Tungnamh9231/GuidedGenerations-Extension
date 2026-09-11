@@ -15,6 +15,19 @@ function patternKey(pattern) {
     return String(pattern).toLowerCase();
 }
 
+function countOccurrences(value, needle) {
+    if (!needle) return 0;
+    let count = 0;
+    let cursor = 0;
+    while (cursor <= value.length - needle.length) {
+        const index = value.indexOf(needle, cursor);
+        if (index === -1) break;
+        count += 1;
+        cursor = index + needle.length;
+    }
+    return count;
+}
+
 function sanitizeRule(rule, index = 0) {
     if (!rule || typeof rule !== 'object') return null;
     const pattern = String(rule.pattern ?? rule.text ?? '').trim();
@@ -171,15 +184,19 @@ function createReport(matcher, protectedThrough) {
         matchedPatterns: 0,
         textBlocks: 0,
         protectedMessages: protectedThrough >= 0 ? protectedThrough + 1 : 0,
+        insertedMarkers: 0,
         samples: [],
         _matchedRuleIds: new Set(),
         _sampleKeys: new Set(),
+        _verificationCounts: new Map(),
     };
 }
 
 function recordReplacement(report, rule, match, transformed) {
     report.replacements += 1;
     report._matchedRuleIds.add(rule.id);
+    report.insertedMarkers += Math.max(0, countOccurrences(transformed, ZERO_WIDTH_SPACE) - countOccurrences(match, ZERO_WIDTH_SPACE));
+    report._verificationCounts.set(transformed, (report._verificationCounts.get(transformed) ?? 0) + 1);
 
     const sampleKey = `${rule.id}\u0000${match}\u0000${transformed}`;
     if (report.samples.length >= MAX_REPORT_SAMPLES || report._sampleKeys.has(sampleKey)) return;
@@ -232,6 +249,78 @@ function isMutableTextRole(message) {
     return role !== 'tool' && role !== 'function';
 }
 
+function collectSafePayloadText(messages) {
+    const textBlocks = [];
+    if (!Array.isArray(messages)) return textBlocks;
+
+    for (const message of messages) {
+        if (!message || typeof message !== 'object' || !isMutableTextRole(message)) continue;
+        const content = message.content;
+        if (typeof content === 'string') {
+            textBlocks.push(content);
+            continue;
+        }
+        if (!Array.isArray(content)) continue;
+        for (const block of content) {
+            if (!block || typeof block !== 'object' || block.type !== 'text' || typeof block.text !== 'string') continue;
+            textBlocks.push(block.text);
+        }
+    }
+    return textBlocks;
+}
+
+export function verifyFinalPayload(generateData, verificationPlan) {
+    const fragments = Array.isArray(verificationPlan?.fragments) ? verificationPlan.fragments : [];
+    if (!fragments.length) {
+        return {
+            status: 'not_needed',
+            expectedOccurrences: 0,
+            matchedOccurrences: 0,
+            expectedMarkers: 0,
+            observedMarkers: 0,
+            missingOccurrences: 0,
+        };
+    }
+
+    if (!Array.isArray(generateData?.messages)) {
+        return {
+            status: 'unavailable',
+            reason: 'final payload messages are unavailable',
+            expectedOccurrences: fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0),
+            matchedOccurrences: 0,
+            expectedMarkers: verificationPlan.expectedMarkers ?? 0,
+            observedMarkers: 0,
+            missingOccurrences: fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0),
+        };
+    }
+
+    const textBlocks = collectSafePayloadText(generateData.messages);
+    const expectedOccurrences = fragments.reduce((sum, fragment) => sum + (fragment.count ?? 0), 0);
+    let matchedOccurrences = 0;
+    let missingOccurrences = 0;
+
+    for (const fragment of fragments) {
+        const expected = Math.max(0, Number(fragment.count) || 0);
+        const actual = textBlocks.reduce((sum, text) => sum + countOccurrences(text, fragment.text), 0);
+        matchedOccurrences += Math.min(expected, actual);
+        missingOccurrences += Math.max(0, expected - actual);
+    }
+
+    const expectedMarkers = Math.max(0, Number(verificationPlan.expectedMarkers) || 0);
+    const observedMarkers = textBlocks.reduce((sum, text) => sum + countOccurrences(text, ZERO_WIDTH_SPACE), 0);
+    const fragmentsPresent = missingOccurrences === 0;
+    const markerFloorPresent = observedMarkers >= expectedMarkers;
+
+    return {
+        status: fragmentsPresent && markerFloorPresent ? 'verified' : 'failed',
+        expectedOccurrences,
+        matchedOccurrences,
+        expectedMarkers,
+        observedMarkers,
+        missingOccurrences,
+    };
+}
+
 export function transformChatInPlace(chat, matcher) {
     const protectedThrough = findLastSignedMessageIndex(chat);
     const report = createReport(matcher, protectedThrough);
@@ -275,7 +364,12 @@ export function transformChatInPlace(chat, matcher) {
 
 function finalizeReport(report) {
     report.matchedPatterns = report._matchedRuleIds.size;
+    report.verificationPlan = {
+        fragments: Array.from(report._verificationCounts, ([text, count]) => ({ text, count })),
+        expectedMarkers: report.insertedMarkers,
+    };
     delete report._matchedRuleIds;
     delete report._sampleKeys;
+    delete report._verificationCounts;
     return report;
 }
