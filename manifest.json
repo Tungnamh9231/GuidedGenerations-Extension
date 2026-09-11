@@ -4,7 +4,7 @@
     "loading_order": 100,
     "requires": [],
     "optional": [],
-    "js": "index.js",
+    "js": "bootstrap.js",
     "css": "style.css",
     "author": "Samueras",
     "description": "Adds various buttons to guide AI generation within SillyTavern, enhancing control over character portrayal, actions, and narrative flow.",
