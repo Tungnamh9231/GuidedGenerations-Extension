@@ -23,6 +23,13 @@ function allUsedIds(tab) {
     return new Set(tab.blocks.flatMap(block => block.promptRefs.map(ref => ref.identifier)));
 }
 
+function normalizePromptSearchText(value) {
+    return String(value ?? '')
+        .normalize('NFD')
+        .replace(/\p{M}+/gu, '')
+        .toLocaleLowerCase();
+}
+
 function createIconButton(icon, title, extraClass = '') {
     const button = document.createElement('button');
     button.type = 'button';
@@ -87,8 +94,13 @@ function ensureStyles() {
         .gg-ub-section-hint { opacity:.58; font-size:9px; }
         .gg-ub-section-actions { display:flex; align-items:center; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
 
-        .gg-ub-add-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; align-items:center; padding:9px; border:1px dashed var(--SmartThemeBorderColor); border-radius:9px; background:rgba(127,127,127,.03); }
+        .gg-ub-add-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; align-items:end; padding:9px; border:1px dashed var(--SmartThemeBorderColor); border-radius:9px; background:rgba(127,127,127,.03); }
+        .gg-ub-add-picker { display:flex; flex-direction:column; gap:6px; min-width:0; }
+        .gg-ub-prompt-search-wrap { position:relative; display:flex; align-items:center; min-width:0; }
+        .gg-ub-prompt-search-wrap > i { position:absolute; left:9px; opacity:.5; pointer-events:none; font-size:10px; }
+        .gg-ub-prompt-search { width:100%; min-width:0; padding-left:28px!important; }
         .gg-ub-add-card select { width:100%; min-width:0; }
+        .gg-ub-prompt-search-meta { min-height:14px; opacity:.58; font-size:9px; line-height:1.3; }
 
         .gg-ub-config-blocks { display:flex; flex-direction:column; gap:9px; min-height:150px; height:100%; max-height:100%; overflow-y:auto; overflow-x:hidden; padding:2px 6px 8px 0; scrollbar-gutter:stable; overscroll-behavior:contain; }
         .gg-ub-config-blocks::-webkit-scrollbar { width:8px; }
@@ -154,7 +166,7 @@ function ensureStyles() {
         @media (max-width:520px) {
             .gg-ub-editor-head { flex-direction:column; }
             .gg-ub-editor-actions { justify-content:flex-start; }
-            .gg-ub-add-card { grid-template-columns:1fr; }
+            .gg-ub-add-card { grid-template-columns:1fr; align-items:stretch; }
             .gg-ub-add-card .menu_button { width:100%; }
             #${UB_SETTINGS_ANCHOR_ID} .gg-native-ub-card { align-items:flex-start; flex-direction:column; }
             #${UB_SETTINGS_ANCHOR_ID} .gg-native-ub-card-actions { justify-content:flex-start; }
@@ -172,6 +184,7 @@ export async function showUbConfigPopup(onSaved = null) {
     let activeTabId = draft.tabs[0]?.id ?? null;
     let groupingTabId = null;
     const selectedBlockIds = new Set();
+    const promptSearchByTab = new Map();
 
     const resetGrouping = () => {
         groupingTabId = null;
@@ -325,38 +338,91 @@ export async function showUbConfigPopup(onSaved = null) {
 
         const addSection = document.createElement('div');
         addSection.className = 'gg-ub-section';
-        addSection.innerHTML = `<div class="gg-ub-section-title-row"><div><div class="gg-ub-section-eyebrow">Prompt Manager</div><h3 class="gg-ub-section-title">Add a state block</h3></div><span class="gg-ub-section-hint">Each block becomes one selectable state.</span></div>`;
+        addSection.innerHTML = `<div class="gg-ub-section-title-row"><div><div class="gg-ub-section-eyebrow">Prompt Manager</div><h3 class="gg-ub-section-title">Add a state block</h3></div><span class="gg-ub-section-hint">Search by prompt name or ID, then add it as one selectable state.</span></div>`;
         const used = allUsedIds(tab);
         const available = promptList.filter(prompt => !used.has(prompt.identifier));
         const addCard = document.createElement('div');
         addCard.className = 'gg-ub-add-card';
+        const picker = document.createElement('div');
+        picker.className = 'gg-ub-add-picker';
+        const searchWrap = document.createElement('div');
+        searchWrap.className = 'gg-ub-prompt-search-wrap';
+        const searchIcon = document.createElement('i');
+        searchIcon.className = 'fa-solid fa-magnifying-glass';
+        const promptSearch = document.createElement('input');
+        promptSearch.type = 'search';
+        promptSearch.className = 'text_pole gg-ub-prompt-search';
+        promptSearch.placeholder = 'Tìm prompt theo tên hoặc ID…';
+        promptSearch.autocomplete = 'off';
+        promptSearch.spellcheck = false;
+        promptSearch.value = promptSearchByTab.get(tab.id) ?? '';
+        searchWrap.append(searchIcon, promptSearch);
         const promptSelect = document.createElement('select');
         promptSelect.className = 'text_pole';
-        if (available.length) {
-            for (const prompt of available) {
-                const option = document.createElement('option');
-                option.value = prompt.identifier;
-                option.textContent = `${prompt.name} · ${prompt.role || 'n/a'}`;
-                promptSelect.appendChild(option);
-            }
-        } else {
-            const option = document.createElement('option');
-            option.value = '';
-            option.textContent = promptManagerReady ? 'All available prompts are already used' : 'Prompt Manager is not ready';
-            promptSelect.appendChild(option);
-        }
+        const searchMeta = document.createElement('div');
+        searchMeta.className = 'gg-ub-prompt-search-meta';
+        picker.append(searchWrap, promptSelect, searchMeta);
         const addBlock = document.createElement('button');
         addBlock.type = 'button';
         addBlock.className = 'menu_button';
         addBlock.innerHTML = '<i class="fa-solid fa-plus"></i> Add block';
-        addBlock.disabled = grouping || !available.length;
-        addBlock.addEventListener('click', () => {
+
+        const filteredAvailablePrompts = () => {
+            const query = normalizePromptSearchText(promptSearch.value.trim());
+            if (!query) return available;
+            return available.filter(prompt => normalizePromptSearchText(`${prompt.name}\n${prompt.identifier}\n${prompt.role || ''}`).includes(query));
+        };
+
+        const refreshPromptPicker = () => {
+            const previousValue = promptSelect.value;
+            const filtered = filteredAvailablePrompts();
+            promptSelect.replaceChildren();
+
+            if (filtered.length) {
+                for (const prompt of filtered) {
+                    const option = document.createElement('option');
+                    option.value = prompt.identifier;
+                    option.textContent = `${prompt.name} · ${prompt.role || 'n/a'}`;
+                    option.title = `${prompt.name}\n${prompt.identifier}`;
+                    promptSelect.appendChild(option);
+                }
+                if (filtered.some(prompt => prompt.identifier === previousValue)) promptSelect.value = previousValue;
+            } else {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = available.length
+                    ? 'Không tìm thấy prompt phù hợp'
+                    : (promptManagerReady ? 'All available prompts are already used' : 'Prompt Manager is not ready');
+                promptSelect.appendChild(option);
+            }
+
+            const queryActive = Boolean(promptSearch.value.trim());
+            searchMeta.textContent = queryActive
+                ? `${filtered.length}/${available.length} prompt chưa dùng khớp tìm kiếm`
+                : `${available.length} prompt chưa dùng trong tab này`;
+            addBlock.disabled = grouping || !filtered.length;
+        };
+
+        const addSelectedPrompt = () => {
             const prompt = promptList.find(item => item.identifier === promptSelect.value);
             if (!prompt) return;
             tab.blocks.push({ id: uid('block'), name: prompt.name, effort: 'min', promptRefs: [promptRef(prompt)] });
             render();
+        };
+
+        promptSearch.addEventListener('input', () => {
+            promptSearchByTab.set(tab.id, promptSearch.value);
+            refreshPromptPicker();
         });
-        addCard.append(promptSelect, addBlock);
+        promptSearch.addEventListener('keydown', event => {
+            if (event.key === 'Enter' && !addBlock.disabled && promptSelect.value) {
+                event.preventDefault();
+                addSelectedPrompt();
+            }
+        });
+        addBlock.addEventListener('click', addSelectedPrompt);
+        refreshPromptPicker();
+        addCard.append(picker, addBlock);
         addSection.appendChild(addCard);
         editorBody.appendChild(addSection);
 
