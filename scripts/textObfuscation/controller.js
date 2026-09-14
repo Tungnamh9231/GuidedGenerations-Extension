@@ -2,7 +2,10 @@ import { getContext } from '../../../../../extensions.js';
 import { peekTextObfuscationSettings } from './store.js';
 import { buildMatcher, transformChatInPlace, verifyFinalPayload } from './transformer.js';
 
-const MAX_PENDING_VERIFICATIONS = 8;
+// Keep correlation history deliberately small. Each pending entry can contain a
+// verification plan with transformed chat text, so a large queue retains a lot
+// of memory on long chats and multiplies fallback verification work.
+const MAX_PENDING_VERIFICATIONS = 3;
 const CHAT_COMPLETION_ENDPOINT = '/api/backends/chat-completions/generate';
 
 function getRequestUrl(input) {
@@ -22,28 +25,6 @@ function isChatCompletionRequest(input) {
     }
 }
 
-function payloadSignature(text) {
-    if (typeof text !== 'string') return null;
-    let first = 0x811c9dc5;
-    let second = 0x9e3779b9;
-    for (let index = 0; index < text.length; index += 1) {
-        const code = text.charCodeAt(index);
-        first ^= code;
-        first = Math.imul(first, 0x01000193);
-        second ^= code;
-        second = Math.imul(second, 0x85ebca6b);
-    }
-    return `${text.length}:${(first >>> 0).toString(16)}:${(second >>> 0).toString(16)}`;
-}
-
-function signatureForPayload(value) {
-    try {
-        return payloadSignature(JSON.stringify(value));
-    } catch {
-        return null;
-    }
-}
-
 function normalizeVerificationResult(result) {
     return {
         ...result,
@@ -51,6 +32,62 @@ function normalizeVerificationResult(result) {
         matchedOccurrences: result?.matchedBlocks ?? 0,
         missingOccurrences: result?.missingBlocks ?? 0,
     };
+}
+
+function createWeakReference(value) {
+    if (value && typeof value === 'object' && typeof WeakRef === 'function') {
+        try {
+            return new WeakRef(value);
+        } catch {
+            // Fall back to a strong reference below.
+        }
+    }
+    return value;
+}
+
+function dereference(value) {
+    if (value && typeof value.deref === 'function') {
+        try {
+            return value.deref();
+        } catch {
+            return undefined;
+        }
+    }
+    return value;
+}
+
+/**
+ * Select a pending correlation candidate without eagerly verifying every entry.
+ * The newest pending request is checked first because SillyTavern's completion
+ * events are normally ordered. We stop immediately on a full verification match
+ * and otherwise keep only the best partial match.
+ */
+function selectByVerification(pendingItems, payload) {
+    if (!pendingItems.length) return null;
+
+    if (pendingItems.length === 1) {
+        return {
+            index: 0,
+            pending: pendingItems[0],
+            result: verifyFinalPayload(payload, pendingItems[0].plan),
+            correlation: 'queue',
+        };
+    }
+
+    let best = null;
+    for (let index = pendingItems.length - 1; index >= 0; index -= 1) {
+        const pending = pendingItems[index];
+        const result = verifyFinalPayload(payload, pending.plan);
+        if (result.status === 'verified') {
+            return { index, pending, result, correlation: 'fingerprint' };
+        }
+        if (result.status === 'unavailable') continue;
+        if (!best || (result.matchedBlocks ?? 0) > (best.result.matchedBlocks ?? 0)) {
+            best = { index, pending, result, correlation: 'fingerprint' };
+        }
+    }
+
+    return (best?.result?.matchedBlocks ?? 0) > 0 ? best : null;
 }
 
 export class TextObfuscationController {
@@ -67,6 +104,8 @@ export class TextObfuscationController {
         this.originalFetch = null;
         this.fetchWrapper = null;
         this.fetchObserverAvailable = false;
+        this.matcherCacheKey = '';
+        this.matcherCache = null;
         this.handlePromptReady = this.handlePromptReady.bind(this);
         this.handleSettingsReady = this.handleSettingsReady.bind(this);
     }
@@ -113,19 +152,19 @@ export class TextObfuscationController {
                 }
             }
 
-            // Call the real fetch first. Reaching the observer below therefore means the
-            // browser accepted the normal fetch invocation; this wrapper never changes args.
+            // Dispatch first and keep verification off the synchronous fetch hot path.
+            // The observer never changes request arguments or the returned promise.
             const result = Reflect.apply(originalFetch, this, args);
 
             if (shouldObserve) {
                 if (bodyText !== null) {
-                    controller.handleNetworkDispatch(bodyText);
+                    setTimeout(() => controller.handleNetworkDispatch(bodyText), 0);
                 } else if (requestBodyPromise) {
                     requestBodyPromise
-                        .then(text => controller.handleNetworkDispatch(text))
-                        .catch(error => controller.handleNetworkDispatch(null, String(error?.message ?? error)));
+                        .then(text => setTimeout(() => controller.handleNetworkDispatch(text), 0))
+                        .catch(error => setTimeout(() => controller.handleNetworkDispatch(null, String(error?.message ?? error)), 0));
                 } else {
-                    controller.handleNetworkDispatch(null, 'outgoing request body is unavailable');
+                    setTimeout(() => controller.handleNetworkDispatch(null, 'outgoing request body is unavailable'), 0);
                 }
             }
 
@@ -167,6 +206,8 @@ export class TextObfuscationController {
         this.settingsEventType = null;
         this.pendingVerifications = [];
         this.pendingDispatches = [];
+        this.matcherCacheKey = '';
+        this.matcherCache = null;
         this.active = false;
     }
 
@@ -186,6 +227,19 @@ export class TextObfuscationController {
             error: String(error?.message ?? error),
             samples: [],
         });
+    }
+
+    getMatcher(rules) {
+        let key = '';
+        try {
+            key = JSON.stringify(rules ?? []);
+        } catch {
+            return buildMatcher(rules);
+        }
+        if (key === this.matcherCacheKey) return this.matcherCache;
+        this.matcherCacheKey = key;
+        this.matcherCache = buildMatcher(rules);
+        return this.matcherCache;
     }
 
     publishReport(report, verificationPlan, chatRef) {
@@ -236,7 +290,9 @@ export class TextObfuscationController {
                 reportId,
                 report: publicReport,
                 plan: verificationPlan,
-                chatRef,
+                // Avoid pinning a complete prompt/messages array in memory solely
+                // for identity correlation when WeakRef is available.
+                chatRef: createWeakReference(chatRef),
             });
             if (this.pendingVerifications.length > MAX_PENDING_VERIFICATIONS) this.pendingVerifications.shift();
         }
@@ -249,7 +305,7 @@ export class TextObfuscationController {
             const settings = peekTextObfuscationSettings();
             if (!settings.enabled) return;
 
-            const matcher = buildMatcher(settings.rules);
+            const matcher = this.getMatcher(settings.rules);
             if (!matcher) {
                 if (!eventData?.dryRun) {
                     this.publishReport({
@@ -286,42 +342,30 @@ export class TextObfuscationController {
         try {
             if (!this.pendingVerifications.length) return;
 
-            const candidates = this.pendingVerifications.map((pending, index) => ({
-                index,
-                pending,
-                result: verifyFinalPayload(generateData, pending.plan),
-            }));
+            // Fast path: identity correlation costs no payload scan. Only verify
+            // the matching pending entry instead of eagerly verifying the entire queue.
+            const identityIndex = this.pendingVerifications.findIndex(
+                pending => dereference(pending.chatRef) === generateData?.messages
+            );
 
-            // Strongest correlation: SillyTavern normally carries the same messages array
-            // from CHAT_COMPLETION_PROMPT_READY into generate_data.messages.
-            let selected = candidates.find(candidate => candidate.pending.chatRef === generateData?.messages);
-            let correlation = selected ? 'identity' : null;
-
-            // Fallback for providers/paths that rebuild the messages array: correlate using
-            // the transformed block fingerprints, preferring a full verification match.
-            if (!selected) {
-                selected = candidates.find(candidate => candidate.result.status === 'verified');
-                if (selected) correlation = 'fingerprint';
-            }
-            if (!selected) {
-                const ranked = candidates
-                    .filter(candidate => candidate.result.status !== 'unavailable')
-                    .sort((a, b) => (b.result.matchedBlocks ?? 0) - (a.result.matchedBlocks ?? 0));
-                if ((ranked[0]?.result?.matchedBlocks ?? 0) > 0) {
-                    selected = ranked[0];
-                    correlation = 'fingerprint';
-                }
-            }
-            if (!selected && candidates.length === 1) {
-                selected = candidates[0];
-                correlation = 'queue';
+            let selected = null;
+            if (identityIndex >= 0) {
+                const pending = this.pendingVerifications[identityIndex];
+                selected = {
+                    index: identityIndex,
+                    pending,
+                    result: verifyFinalPayload(generateData, pending.plan),
+                    correlation: 'identity',
+                };
+            } else {
+                selected = selectByVerification(this.pendingVerifications, generateData);
             }
             if (!selected) return;
 
             this.pendingVerifications.splice(selected.index, 1);
             const verification = {
                 ...normalizeVerificationResult(selected.result),
-                correlation,
+                correlation: selected.correlation,
             };
             const nextReport = {
                 ...selected.pending.report,
@@ -333,7 +377,6 @@ export class TextObfuscationController {
                     reportId: selected.pending.reportId,
                     report: nextReport,
                     plan: selected.pending.plan,
-                    payloadSignature: signatureForPayload(generateData),
                 });
                 if (this.pendingDispatches.length > MAX_PENDING_VERIFICATIONS) this.pendingDispatches.shift();
             }
@@ -364,7 +407,7 @@ export class TextObfuscationController {
                     ...pending.report,
                     dispatch: {
                         status: 'observed',
-                        reason: bodyError ?? 'request body is unavailable',
+                        reason: bodyError ?? 'outgoing request body is unavailable',
                     },
                 };
                 if (pending.reportId === this.latestReportId) this.safeSetLastReport(nextReport);
@@ -379,32 +422,16 @@ export class TextObfuscationController {
                 parseError = String(error?.message ?? error);
             }
 
-            const outgoingSignature = payloadSignature(bodyText);
-            const candidates = this.pendingDispatches.map((pending, index) => ({
-                index,
-                pending,
-                signatureMatch: Boolean(pending.payloadSignature && pending.payloadSignature === outgoingSignature),
-                result: payload ? verifyFinalPayload(payload, pending.plan) : null,
-            }));
-
-            let selected = candidates.find(candidate => candidate.signatureMatch);
-            let correlation = selected ? 'serialized' : null;
-            if (!selected && payload) {
-                selected = candidates.find(candidate => candidate.result?.status === 'verified');
-                if (selected) correlation = 'fingerprint';
-            }
-            if (!selected && payload) {
-                const ranked = candidates
-                    .filter(candidate => candidate.result?.status && candidate.result.status !== 'unavailable')
-                    .sort((a, b) => (b.result?.matchedBlocks ?? 0) - (a.result?.matchedBlocks ?? 0));
-                if ((ranked[0]?.result?.matchedBlocks ?? 0) > 0) {
-                    selected = ranked[0];
-                    correlation = 'fingerprint';
-                }
-            }
-            if (!selected && candidates.length === 1) {
-                selected = candidates[0];
-                correlation = 'queue';
+            let selected = null;
+            if (payload) selected = selectByVerification(this.pendingDispatches, payload);
+            if (!selected && this.pendingDispatches.length === 1) {
+                const pending = this.pendingDispatches[0];
+                selected = {
+                    index: 0,
+                    pending,
+                    result: payload ? verifyFinalPayload(payload, pending.plan) : null,
+                    correlation: 'queue',
+                };
             }
             if (!selected) return;
 
@@ -413,7 +440,7 @@ export class TextObfuscationController {
             if (!payload) {
                 dispatch = {
                     status: 'observed',
-                    correlation,
+                    correlation: selected.correlation,
                     reason: parseError ? `fetch body is not parseable JSON (${parseError})` : 'fetch body is unavailable',
                 };
             } else {
@@ -421,7 +448,7 @@ export class TextObfuscationController {
                 dispatch = {
                     ...normalized,
                     status: normalized.status === 'verified' ? 'verified' : normalized.status,
-                    correlation,
+                    correlation: selected.correlation,
                     endpoint: CHAT_COMPLETION_ENDPOINT,
                 };
             }
