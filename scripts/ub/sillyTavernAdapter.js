@@ -122,12 +122,13 @@ export function getPromptEnabled(identifier) {
  * Apply a complete UB prompt-state map using SillyTavern's own PromptManager
  * model.
  *
- * We batch the state mutations and token invalidation, then ask PromptManager to
- * rebuild its own rows once with render(false). This is important: only changing
- * entry.enabled plus CSS made the switches look right while leaving stale DOM
- * nodes/listeners behind after a UB state transition. render(false) uses ST's
- * canonical renderer and rebinds the native toggle controls without the costly
- * prompt dry-run performed by render().
+ * SillyTavern's native toggle path invalidates the affected token count and then
+ * calls PromptManager.render() with its default `afterTryGenerate = true`. That
+ * dry run is what recomputes prompt token counts and refreshes PromptManager's
+ * derived state. Skipping it with render(false) only repaints the rows, leaving
+ * enabled prompts with a stale/blank token count and making the transition differ
+ * from a real native toggle. We therefore batch all UB mutations first and then
+ * perform one canonical native render/dry-run for the complete state change.
  */
 export async function applyPromptEnabledMap(enabledByIdentifier) {
     if (!isPromptManagerReady()) {
@@ -159,11 +160,11 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
     }
 
     if (changed) {
-        // Rebuild through SillyTavern's native PromptManager so the actual
-        // toggle actions/listeners are recreated, not merely painted to look on/off.
-        // Passing false skips tryGenerate(), keeping UB transitions responsive.
+        // Match SillyTavern's native PromptManager toggle lifecycle. Calling
+        // render() without `false` runs the dry generation pass that recomputes
+        // token counts and rebuilds the prompt rows/listeners from canonical state.
         try {
-            promptManager.render?.(false);
+            promptManager.render?.();
         } catch (error) {
             console.warn('[GG Native UB] PromptManager native UI refresh failed:', error);
         }
