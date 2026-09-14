@@ -145,14 +145,16 @@ export class MessageToolbarController {
         listen(eventTypes.GENERATION_STOPPED, generationEnded);
         listen(eventTypes.GENERATION_ENDED, generationEnded);
 
-        const sync = () => {
-            this.renderAll();
-            this.syncBadges();
-        };
-        listen(eventTypes.SETTINGS_UPDATED, sync);
-        listen(eventTypes.OAI_PRESET_CHANGED_AFTER, sync);
-        listen(eventTypes.CHATCOMPLETION_SOURCE_CHANGED, sync);
-        listen(eventTypes.CHATCOMPLETION_MODEL_CHANGED, sync);
+        // These are high-frequency/global SillyTavern events. Rebuilding every
+        // visible message toolbar here used to destroy and recreate all UB DOM
+        // controls on unrelated settings saves. UB's own config already calls
+        // controller.refresh() when its structure changes, so global events only
+        // need to refresh derived badge/disabled state.
+        const syncStateOnly = () => this.syncBadges();
+        listen(eventTypes.SETTINGS_UPDATED, syncStateOnly);
+        listen(eventTypes.OAI_PRESET_CHANGED_AFTER, syncStateOnly);
+        listen(eventTypes.CHATCOMPLETION_SOURCE_CHANGED, syncStateOnly);
+        listen(eventTypes.CHATCOMPLETION_MODEL_CHANGED, syncStateOnly);
 
         this.renderAll();
         requestAnimationFrame(() => this.renderAll());
