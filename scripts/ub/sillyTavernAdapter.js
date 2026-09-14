@@ -120,14 +120,14 @@ export function getPromptEnabled(identifier) {
 
 /**
  * Apply a complete UB prompt-state map using SillyTavern's own PromptManager
- * model, but deliberately avoid PromptManager.render() on the hot path.
+ * model.
  *
- * PromptManager.render() performs tryGenerate() by default before repainting the
- * manager. Awaiting that for every toolbar click made UB transitions feel slow
- * and could keep the toolbar locked for seconds. ST's own toggle handler mutates
- * promptOrderEntry.enabled and invalidates token counts before render/save, so we
- * perform those state mutations directly, mirror the visible row state, and let
- * settings persistence run in the background.
+ * We batch the state mutations and token invalidation, then ask PromptManager to
+ * rebuild its own rows once with render(false). This is important: only changing
+ * entry.enabled plus CSS made the switches look right while leaving stale DOM
+ * nodes/listeners behind after a UB state transition. render(false) uses ST's
+ * canonical renderer and rebinds the native toggle controls without the costly
+ * prompt dry-run performed by render().
  */
 export async function applyPromptEnabledMap(enabledByIdentifier) {
     if (!isPromptManagerReady()) {
@@ -158,7 +158,17 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
         changed = true;
     }
 
-    if (changed) persistPromptManagerInBackground();
+    if (changed) {
+        // Rebuild through SillyTavern's native PromptManager so the actual
+        // toggle actions/listeners are recreated, not merely painted to look on/off.
+        // Passing false skips tryGenerate(), keeping UB transitions responsive.
+        try {
+            promptManager.render?.(false);
+        } catch (error) {
+            console.warn('[GG Native UB] PromptManager native UI refresh failed:', error);
+        }
+        persistPromptManagerInBackground();
+    }
     return { changed, missing: [], unavailable: false };
 }
 
