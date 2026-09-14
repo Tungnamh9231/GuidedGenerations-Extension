@@ -298,19 +298,27 @@ export function verifyFinalPayload(generateData, verificationPlan) {
         };
     }
 
-    const textBlocks = collectSafePayloadText(generateData.messages);
+    // Build exact-text occurrence counts and the marker total in one pass. The
+    // previous implementation rescanned every payload text block once for every
+    // expected verification block (O(expected * payload)), which becomes very
+    // expensive on long chats or common-word rules.
+    const textCounts = new Map();
+    let observedMarkers = 0;
+    for (const text of collectSafePayloadText(generateData.messages)) {
+        textCounts.set(text, (textCounts.get(text) ?? 0) + 1);
+        observedMarkers += countOccurrences(text, ZERO_WIDTH_SPACE);
+    }
+
     let matchedBlocks = 0;
     let missingBlocks = 0;
-
     for (const block of blocks) {
         const expected = Math.max(0, Number(block.count) || 0);
-        const actual = textBlocks.reduce((sum, text) => sum + (text === block.text ? 1 : 0), 0);
+        const actual = textCounts.get(block.text) ?? 0;
         matchedBlocks += Math.min(expected, actual);
         missingBlocks += Math.max(0, expected - actual);
     }
 
     const expectedMarkers = Math.max(0, Number(verificationPlan.expectedMarkers) || 0);
-    const observedMarkers = textBlocks.reduce((sum, text) => sum + countOccurrences(text, ZERO_WIDTH_SPACE), 0);
     const blocksPresent = missingBlocks === 0;
     const markerFloorPresent = observedMarkers >= expectedMarkers;
 
