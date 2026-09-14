@@ -20,6 +20,37 @@ const VALID_EFFORTS = new Set([
     reasoning_effort_types?.max ?? 'max',
 ]);
 
+// PromptManager.render() is intentionally fire-and-forget in SillyTavern. Its
+// default path waits for generation unlock and then starts a dry Generate(). If
+// UB calls it repeatedly, those jobs can pile up because the caller cannot await
+// completion. Keep our own refresh path serial and await the dry run explicitly,
+// then ask PromptManager to do only the cheap DOM repaint with render(false).
+let promptRefreshChain = Promise.resolve();
+
+function refreshPromptManagerAfterUbChange() {
+    const refresh = async () => {
+        try {
+            const result = promptManager?.tryGenerate?.();
+            if (result && typeof result.then === 'function') await result;
+        } catch (error) {
+            // Native PromptManager.render() uses finally() and still repaints when
+            // the dry run fails, so preserve that behavior here.
+            console.warn('[GG Native UB] PromptManager token refresh dry-run failed:', error);
+        }
+
+        try {
+            promptManager.render?.(false);
+        } catch (error) {
+            console.warn('[GG Native UB] PromptManager native UI repaint failed:', error);
+        }
+    };
+
+    // Never allow multiple expensive dry runs to overlap. Also recover the chain
+    // after an unexpected rejection so future UB changes remain usable.
+    promptRefreshChain = promptRefreshChain.catch(() => undefined).then(refresh);
+    return promptRefreshChain;
+}
+
 export function getStContext() {
     return getContext();
 }
@@ -122,13 +153,12 @@ export function getPromptEnabled(identifier) {
  * Apply a complete UB prompt-state map using SillyTavern's own PromptManager
  * model.
  *
- * SillyTavern's native toggle path invalidates the affected token count and then
- * calls PromptManager.render() with its default `afterTryGenerate = true`. That
- * dry run is what recomputes prompt token counts and refreshes PromptManager's
- * derived state. Skipping it with render(false) only repaints the rows, leaving
- * enabled prompts with a stale/blank token count and making the transition differ
- * from a real native toggle. We therefore batch all UB mutations first and then
- * perform one canonical native render/dry-run for the complete state change.
+ * Token counts must be recomputed after a UB state change, but calling the public
+ * PromptManager.render() default path is unsafe for rapid/repeated UB transitions:
+ * render() is fire-and-forget, waits asynchronously for generation unlock, and
+ * launches a dry Generate(). Those pending renders can accumulate. We instead
+ * serialize the same expensive dry-run ourselves, await it, then use render(false)
+ * only to rebuild PromptManager's rows/listeners from the refreshed canonical data.
  */
 export async function applyPromptEnabledMap(enabledByIdentifier) {
     if (!isPromptManagerReady()) {
@@ -160,15 +190,11 @@ export async function applyPromptEnabledMap(enabledByIdentifier) {
     }
 
     if (changed) {
-        // Match SillyTavern's native PromptManager toggle lifecycle. Calling
-        // render() without `false` runs the dry generation pass that recomputes
-        // token counts and rebuilds the prompt rows/listeners from canonical state.
-        try {
-            promptManager.render?.();
-        } catch (error) {
-            console.warn('[GG Native UB] PromptManager native UI refresh failed:', error);
-        }
+        // Save the canonical state immediately, then keep the UB action locked
+        // until the single serialized token refresh finishes. This prevents the
+        // user from creating a backlog of PromptManager dry renders.
         persistPromptManagerInBackground();
+        await refreshPromptManagerAfterUbChange();
     }
     return { changed, missing: [], unavailable: false };
 }
