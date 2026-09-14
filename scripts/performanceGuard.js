@@ -16,10 +16,23 @@ if (!globalThis[GUARD_KEY] && typeof NativeMutationObserver === 'function') {
     class GuidedGenerationsMutationObserver extends NativeMutationObserver {
         constructor(callback) {
             const stack = String(new Error().stack ?? '');
+            let callbackSource = '';
+            try {
+                callbackSource = Function.prototype.toString.call(callback);
+            } catch {
+                // Ignore and rely on the stack-only check below.
+            }
             super(callback);
-            this.__ggScopeLegacyQrObserver =
-                stack.includes('GuidedGenerations-Extension/index.js')
-                && stack.includes('setupQRMutationObserver');
+
+            // setTimeout callbacks do not reliably retain their parent function name
+            // in Error.stack across Chromium versions. Match the distinctive callback
+            // body as well as the extension source path so the guard is deterministic.
+            const fromLegacyExtension = stack.includes('GuidedGenerations-Extension/index.js');
+            const looksLikeQrBodyObserver = callbackSource.includes('qr--bar')
+                && callbackSource.includes('shouldTryIntegrate')
+                && callbackSource.includes('integrateQRBar');
+            this.__ggScopeLegacyQrObserver = fromLegacyExtension
+                && (stack.includes('setupQRMutationObserver') || looksLikeQrBodyObserver);
             this.__ggDeferredObserveTimer = null;
         }
 
