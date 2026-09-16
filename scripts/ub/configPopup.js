@@ -267,7 +267,7 @@ export async function showUbConfigPopup(onSaved = null) {
         const createTab = () => {
             const name = newName.value.trim();
             if (!name) return;
-            const tabItem = { id: uid('tab'), name: name.slice(0, 10).toUpperCase(), isDefault: false, enabled: true, changeEffort: false, blocks: [] };
+            const tabItem = { id: uid('tab'), name: name.slice(0, 10).toUpperCase(), isDefault: false, enabled: true, changeEffort: false, ljbFirst: false, blocks: [] };
             draft.tabs.push(tabItem);
             activeTabId = tabItem.id;
             resetGrouping();
@@ -325,6 +325,17 @@ export async function showUbConfigPopup(onSaved = null) {
         effortToggle.innerHTML = `<input type="checkbox" ${tab.changeEffort ? 'checked' : ''} ${grouping ? 'disabled' : ''}><span>Change effort</span>`;
         effortToggle.querySelector('input').addEventListener('change', event => { tab.changeEffort = event.target.checked; render(); });
         editorActions.appendChild(effortToggle);
+        if (tab.isDefault) {
+            const ljbToggle = document.createElement('label');
+            ljbToggle.className = 'gg-ub-inline-toggle';
+            const ljbDisabled = grouping || !tab.changeEffort;
+            ljbToggle.innerHTML = `<input type="checkbox" ${tab.ljbFirst ? 'checked' : ''} ${ljbDisabled ? 'disabled' : ''}><span>LJB first</span>`;
+            ljbToggle.title = tab.changeEffort
+                ? 'Include LJB as the first optional step after UB.'
+                : 'Enable Change effort to use LJB first.';
+            ljbToggle.querySelector('input').addEventListener('change', event => { tab.ljbFirst = event.target.checked; });
+            editorActions.appendChild(ljbToggle);
+        }
         if (!tab.isDefault && !grouping) {
             const removeTab = createIconButton('fa-trash', 'Delete this tab', 'gg-ub-config-danger');
             removeTab.addEventListener('click', () => { draft.tabs = draft.tabs.filter(item => item.id !== tab.id); activeTabId = draft.tabs[0]?.id ?? null; resetGrouping(); render(); });

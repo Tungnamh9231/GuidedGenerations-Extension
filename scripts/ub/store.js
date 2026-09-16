@@ -27,6 +27,7 @@ export function createDefaultUbSettings() {
                 isDefault: true,
                 enabled: true,
                 changeEffort: true,
+                ljbFirst: false,
                 blocks: [],
             },
         ],
@@ -76,6 +77,7 @@ function sanitizeTab(tab, index) {
         isDefault: Boolean(tab.isDefault ?? index === 0),
         enabled: tab.enabled !== false,
         changeEffort: tab.changeEffort !== false,
+        ljbFirst: Boolean(tab.ljbFirst),
         blocks,
     };
 }

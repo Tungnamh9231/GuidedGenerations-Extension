@@ -22,7 +22,10 @@ export function getAvailableStates(tab) {
     const blockStates = (tab.blocks ?? []).map((_, index) =>
         tab.isDefault ? `HJB${index + 1}` : `${tab.name}${index + 1}`
     );
-    return tab.isDefault ? ['UB', 'LJB', ...blockStates] : ['OFF', ...blockStates];
+    if (!tab.isDefault) return ['OFF', ...blockStates];
+
+    const includeLjbFirst = tab.changeEffort && tab.ljbFirst;
+    return ['UB', ...(includeLjbFirst ? ['LJB'] : []), ...blockStates];
 }
 
 export function deriveTabState(tab) {
@@ -63,6 +66,11 @@ export function deriveTabState(tab) {
 
     if (anyConfiguredPromptEnabled) return { state: 'E', missing: [] };
     if (!tab.isDefault) return { state: 'OFF', missing: [] };
+
+    // LJB only exists when both the parent (Change effort) and child
+    // (LJB first) settings are enabled. Otherwise the no-prompt baseline is UB
+    // and reasoning effort is intentionally ignored for state derivation.
+    if (!(tab.changeEffort && tab.ljbFirst)) return { state: 'UB', missing: [] };
 
     const effort = getReasoningEffort();
     if (effort === 'high') return { state: 'UB', missing: [] };
