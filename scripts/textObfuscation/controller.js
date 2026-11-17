@@ -4,6 +4,7 @@ import {
     buildMatcher,
     stripMarkersFromText,
     transformChatInPlace,
+    transformTextWithStats,
     verifyFinalPayload,
 } from './transformer.js';
 
@@ -101,6 +102,7 @@ export class TextObfuscationController {
         this.active = false;
         this.eventSource = null;
         this.promptEventType = null;
+        this.textPromptEventType = null;
         this.settingsEventType = null;
         this.messageReceivedType = null;
         this.messageSwipedType = null;
@@ -114,6 +116,7 @@ export class TextObfuscationController {
         this.matcherCacheKey = '';
         this.matcherCache = null;
         this.handlePromptReady = this.handlePromptReady.bind(this);
+        this.handleTextPromptReady = this.handleTextPromptReady.bind(this);
         this.handleSettingsReady = this.handleSettingsReady.bind(this);
         this.handleMessageReceived = this.handleMessageReceived.bind(this);
         this.handleMessageSwiped = this.handleMessageSwiped.bind(this);
@@ -124,10 +127,12 @@ export class TextObfuscationController {
         const context = getContext();
         const eventSource = context.eventSource;
         const promptEventType = context.eventTypes?.CHAT_COMPLETION_PROMPT_READY;
+        const textPromptEventType = context.eventTypes?.GENERATE_AFTER_COMBINE_PROMPTS;
         const settingsEventType = context.eventTypes?.CHAT_COMPLETION_SETTINGS_READY;
         if (!eventSource || !promptEventType) throw new Error('CHAT_COMPLETION_PROMPT_READY is unavailable.');
 
         eventSource.on(promptEventType, this.handlePromptReady);
+        if (textPromptEventType) eventSource.on(textPromptEventType, this.handleTextPromptReady);
         if (settingsEventType) eventSource.on(settingsEventType, this.handleSettingsReady);
         else console.warn('[GG Unicode Sensitive Words] CHAT_COMPLETION_SETTINGS_READY is unavailable; final payload verification is disabled.');
 
@@ -138,6 +143,7 @@ export class TextObfuscationController {
 
         this.eventSource = eventSource;
         this.promptEventType = promptEventType;
+        this.textPromptEventType = textPromptEventType ?? null;
         this.settingsEventType = settingsEventType ?? null;
         this.messageReceivedType = receivedType ?? null;
         this.messageSwipedType = swipedType ?? null;
@@ -212,6 +218,7 @@ export class TextObfuscationController {
         if (!this.active) return;
         try {
             this.detach(this.promptEventType, this.handlePromptReady);
+            this.detach(this.textPromptEventType, this.handleTextPromptReady);
             this.detach(this.settingsEventType, this.handleSettingsReady);
             this.detach(this.messageReceivedType, this.handleMessageReceived);
             this.detach(this.messageSwipedType, this.handleMessageSwiped);
@@ -221,6 +228,7 @@ export class TextObfuscationController {
         this.uninstallFetchObserver();
         this.eventSource = null;
         this.promptEventType = null;
+        this.textPromptEventType = null;
         this.settingsEventType = null;
         this.messageReceivedType = null;
         this.messageSwipedType = null;
@@ -246,6 +254,17 @@ export class TextObfuscationController {
             reportId,
             error: String(error?.message ?? error),
             samples: [],
+        });
+    }
+
+    publishTextReport(report) {
+        const reportId = ++this.reportSerial;
+        this.latestReportId = reportId;
+        this.safeSetLastReport({
+            ...report,
+            reportId,
+            verification: { status: 'not_needed' },
+            dispatch: { status: 'not_needed' },
         });
     }
 
@@ -360,6 +379,34 @@ export class TextObfuscationController {
         } catch (error) {
             console.error('[GG Unicode Sensitive Words] Transform failed; continuing with SillyTavern pipeline.', error);
             if (!eventData?.dryRun) this.publishError(error);
+        }
+    }
+
+    handleTextPromptReady(eventData) {
+        try {
+            const settings = peekTextObfuscationSettings();
+            if (!settings.enabled) return;
+            if (typeof eventData?.prompt !== 'string' || !eventData.prompt) return;
+
+            const matcher = this.getMatcher(settings);
+            if (!matcher) return;
+
+            const { transformed, stats } = transformTextWithStats(eventData.prompt, matcher);
+            if (transformed === eventData.prompt) return;
+            eventData.prompt = transformed;
+            if (eventData.dryRun) return;
+
+            this.publishTextReport({
+                activePatterns: matcher.rules.length,
+                replacements: stats.replacements,
+                matchedPatterns: stats.ruleIds.size,
+                textBlocks: 1,
+                protectedMessages: 0,
+                insertedMarkers: stats.insertedMarkers,
+                samples: stats.samples,
+            });
+        } catch (error) {
+            console.error('[GG Unicode Sensitive Words] Text prompt transform failed; continuing with SillyTavern pipeline.', error);
         }
     }
 

@@ -228,9 +228,9 @@ export class TextObfuscationSettingsView {
                 <div class="gg-text-obfuscation-head">
                     <div>
                         <div class="gg-text-obfuscation-title"><i class="fa-solid fa-text-width"></i> Zero-width text transform</div>
-                        <small class="setting_item_description">Thêm từng từ/cụm từ thành rule riêng. Ký tự vô hình được chèn giữa từ (không chen vào dấu kết hợp), có thể đổi bộ ký tự, thêm chữ ngoại quốc giống hệt, bảo vệ code/URL và tự dọn marker ở tin nhắn AI trả về. Chỉ prompt tạm được sửa; chat lưu và shape payload không bị rebuild.</small>
+                        <small class="setting_item_description">Thêm từng từ/cụm từ thành rule riêng. Ký tự vô hình được chèn giữa từ (không chen vào dấu kết hợp), có thể đổi bộ ký tự, thêm chữ ngoại quốc giống hệt, bảo vệ code/URL và tự dọn marker ở tin nhắn AI trả về. Áp dụng cho chat/text completion và các công cụ generate của extension; chat lưu và shape payload không bị rebuild.</small>
                     </div>
-                    <label class="gg-text-obfuscation-toggle" title="Bật xử lý cho mọi Chat Completion generation.">
+                    <label class="gg-text-obfuscation-toggle" title="Bật xử lý cho mọi generation (chat/text completion và công cụ extension).">
                         <input type="checkbox" class="gg-text-obfuscation-enable">
                         <span>Enabled</span>
                     </label>

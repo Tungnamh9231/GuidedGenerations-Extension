@@ -18,6 +18,7 @@ import {
     fillPromptTemplate
 } from '../persistentGuides/guideExports.js'; // Import from central hub
 import { openRequestPromptSlot, closeRequestPromptSlot } from '../promptManager/store.js';
+import descriptionHistory from './descriptionHistory.js';
 
 
 
@@ -112,33 +113,66 @@ function computeLineDiff(oldText, newText) {
 }
 
 /**
- * Render word-level diff for a modified block into inline HTML.
- * Unchanged text renders normally, removed words in red, added words in green.
+ * Word-level diff for a pair of lines, rendered separately for the old and
+ * new sides so the final view can keep removed lines above added lines.
  */
-function renderModifiedHtml(oldText, newText) {
+function renderInlineDiff(oldText, newText) {
     const oldTokens = tokenizeWords(oldText);
     const newTokens = tokenizeWords(newText);
     const wordDiff = computeLCS(oldTokens, newTokens);
 
-    return wordDiff.map(entry => {
+    let oldHtml = '';
+    let newHtml = '';
+    for (const entry of wordDiff) {
         const escaped = escapeHtml(entry.text);
         switch (entry.type) {
             case 'removed':
-                return `<span class="gg-diff-word-removed">${escaped}</span>`;
+                oldHtml += `<span class="gg-diff-word-removed">${escaped}</span>`;
+                break;
             case 'added':
-                return `<span class="gg-diff-word-added">${escaped}</span>`;
+                newHtml += `<span class="gg-diff-word-added">${escaped}</span>`;
+                break;
             default:
-                return escaped;
+                oldHtml += escaped;
+                newHtml += escaped;
+                break;
         }
-    }).join('');
+    }
+    return { oldHtml, newHtml };
 }
 
 /**
- * Render diff result into HTML string
+ * Render a modified block the GitHub way: every removed line first (red),
+ * then every added line (green). Lines are paired by index for inline
+ * word-level highlights where both sides exist.
  */
-function renderDiffHtml(diffResult) {
+function renderModifiedBlock(oldText, newText) {
+    const oldLines = String(oldText ?? '').split('\n');
+    const newLines = String(newText ?? '').split('\n');
+    const pairCount = Math.min(oldLines.length, newLines.length);
+    const pairs = [];
+    for (let index = 0; index < pairCount; index++) {
+        pairs.push(renderInlineDiff(oldLines[index], newLines[index]));
+    }
+
+    const removedHtml = oldLines.map((line, index) => {
+        const content = index < pairCount ? pairs[index].oldHtml : escapeHtml(line || ' ');
+        return `<div class="gg-diff-line gg-diff-removed"><span class="gg-diff-prefix">−</span>${content || ' '}</div>`;
+    }).join('');
+    const addedHtml = newLines.map((line, index) => {
+        const content = index < pairCount ? pairs[index].newHtml : escapeHtml(line || ' ');
+        return `<div class="gg-diff-line gg-diff-added"><span class="gg-diff-prefix">+</span>${content || ' '}</div>`;
+    }).join('');
+    return `${removedHtml}${addedHtml}`;
+}
+
+/**
+ * Render diff result into HTML string. Removed lines are emitted before
+ * added lines for every changed block, matching a normal unified diff.
+ */
+function renderDiffHtml(diffResult, { showHeader = true } = {}) {
     const header = `<div class="gg-diff-header">
-        <span>📊 Diff View</span>
+        <span>Diff View</span>
         <span class="gg-diff-legend"><span class="gg-diff-legend-color gg-diff-legend-added"></span> Added</span>
         <span class="gg-diff-legend"><span class="gg-diff-legend-color gg-diff-legend-removed"></span> Removed</span>
     </div>`;
@@ -154,8 +188,7 @@ function renderDiffHtml(diffResult) {
                 return `<div class="gg-diff-line gg-diff-removed"><span class="gg-diff-prefix">−</span>${escaped}</div>`;
             }
             case 'modified': {
-                const inlineHtml = renderModifiedHtml(entry.oldText, entry.newText);
-                return `<div class="gg-diff-line gg-diff-modified"><span class="gg-diff-prefix">~</span>${inlineHtml}</div>`;
+                return renderModifiedBlock(entry.oldText, entry.newText);
             }
             default: {
                 const escaped = escapeHtml(entry.text || ' ');
@@ -164,7 +197,18 @@ function renderDiffHtml(diffResult) {
         }
     }).join('');
 
-    return `${header}${lines}`;
+    return `${showHeader ? header : ''}${lines}`;
+}
+
+function historyModeLabel(mode) {
+    const labels = {
+        before: 'Before change',
+        editExisting: 'Edit Existing',
+        makeNew: 'Create New',
+        createWorld: 'Create World',
+        revert: 'Revert',
+    };
+    return labels[mode] || 'Change';
 }
 
 function escapeHtml(str) {
@@ -183,9 +227,11 @@ const GUIDEBOOK_HTML = `
             <li>You will see a <strong>diff view</strong> comparing the old and new description.</li>
             <li><span style="color:#3fb950;">Green lines (+)</span> = newly added content.</li>
             <li><span style="color:#f85149;">Red lines (-)</span> = removed content.</li>
-            <li>Click <strong>Apply</strong> to save the changes, or <strong>Revert</strong> to discard them.</li>
+            <li>Click <strong>Apply</strong> to save the changes, or <strong>Discard</strong> to throw them away.</li>
         </ul>
         <p><em>Create New and Create World replace the description immediately; only Edit Existing opens the comparison preview.</em></p>
+        <h4>History and revert</h4>
+        <p>Every applied change saves the description from before that change as a snapshot for the current character (up to 10). Open the <strong>History</strong> tab to revert to a snapshot or delete snapshots. History is removed automatically when its character is deleted.</p>
     </div>
 </details>
 `;
@@ -202,6 +248,9 @@ export class EditDescriptionPopup {
         this._pendingGeneratedDescription = null; // Stored for Apply button
         this._isDiffMode = false; // Currently showing diff?
         this._isPreviewMode = false; // Currently in preview mode?
+        this._pendingCharacter = null; // Character captured when generation starts
+        this.comparePopup = null;
+        this.compareState = null;
     }
 
     /**
@@ -257,6 +306,10 @@ export class EditDescriptionPopup {
                                 <button type="button" id="gg-description-tab-format" class="gg-tab-btn" data-tab="format" role="tab" aria-selected="false" aria-controls="gg-tab-format">
                                     <i class="fa-solid fa-list-check" aria-hidden="true"></i>
                                     <span>Output Format</span>
+                                </button>
+                                <button type="button" id="gg-description-tab-history" class="gg-tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="gg-tab-history">
+                                    <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+                                    <span>History</span>
                                 </button>
                             </div>
 
@@ -323,6 +376,29 @@ export class EditDescriptionPopup {
                                 </section>
                             </div>
 
+                            <div id="gg-tab-history" class="gg-tab-content" role="tabpanel" aria-labelledby="gg-description-tab-history" hidden>
+                                <section class="gg-popup-section gg-editor-card gg-history-section">
+                                    <div class="gg-editor-section-heading">
+                                        <div>
+                                            <h3>Revert History</h3>
+                                            <p id="gg-history-subtitle">Descriptions from before each change for the current character. Up to 10 are kept per character.</p>
+                                        </div>
+                                        <span id="gg-history-count" class="gg-editor-meta">0 / 10 saved</span>
+                                    </div>
+                                    <div class="gg-desc-history-toolbar">
+                                        <button type="button" id="gg-history-view-all" class="gg-button gg-button-secondary">
+                                            <i class="fa-solid fa-table-list" aria-hidden="true"></i>
+                                            <span>View all characters</span>
+                                        </button>
+                                        <button type="button" id="gg-history-clear" class="gg-button gg-button-quiet gg-desc-history-danger">
+                                            <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+                                            <span>Delete all</span>
+                                        </button>
+                                    </div>
+                                    <div id="gg-history-list" class="gg-desc-history-list"></div>
+                                </section>
+                            </div>
+
                             ${GUIDEBOOK_HTML}
                         </div>
                         <div class="gg-popup-footer-wrap gg-editor-footer-wrap">
@@ -375,6 +451,17 @@ export class EditDescriptionPopup {
         // Setup event listeners
         this.setupEventListeners();
 
+        try {
+            descriptionHistory.init();
+            descriptionHistory.attachPanel(this.popupElement, {
+                getCurrentCharacter: () => this._getCurrentCharacter(),
+                onRevert: (value) => this._applyHistoryValue(value),
+                onCompare: (payload) => this._openHistoryCompare(payload),
+            });
+        } catch (error) {
+            console.error('[GuidedGenerations] Description history initialization failed:', error);
+        }
+
         this.initialized = true;
     }
 
@@ -410,11 +497,24 @@ export class EditDescriptionPopup {
         applyBtn?.addEventListener('click', () => {
             if (this._pendingGeneratedDescription) {
                 const descriptionTextarea = document.getElementById('description_textarea');
+                const targetCharacter = this._pendingCharacter;
+                const currentCharacter = this._getCurrentCharacter();
+                if (targetCharacter && targetCharacter.avatar !== currentCharacter?.avatar) {
+                    alert('The active character changed while the edit was being prepared, so the result was not applied.');
+                    this._clearDiffState();
+                    this.close();
+                    return;
+                }
                 if (descriptionTextarea) {
-                    descriptionTextarea.value = this._pendingGeneratedDescription;
+                    const beforeValue = descriptionTextarea.value;
+                    const afterValue = this._pendingGeneratedDescription;
+                    descriptionTextarea.value = afterValue;
                     const inputEvent = new Event('input', { bubbles: true });
                     descriptionTextarea.dispatchEvent(inputEvent);
                     descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+                    if (currentCharacter || targetCharacter) {
+                        descriptionHistory.record(currentCharacter || targetCharacter, beforeValue, afterValue);
+                    }
                 }
             }
             this._clearDiffState();
@@ -424,7 +524,6 @@ export class EditDescriptionPopup {
         // Tabs
         const tabBtns = this.popupElement.querySelectorAll('.gg-tab-btn');
         const tabContents = this.popupElement.querySelectorAll('.gg-tab-content');
-        const footerWrap = this.popupElement.querySelector('.gg-popup-footer-wrap');
         tabBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const selectedButton = e.currentTarget;
@@ -445,10 +544,12 @@ export class EditDescriptionPopup {
                     content.classList.toggle('active', isActive);
                 });
 
-                // Toggle footer
-                if (footerWrap) {
-                    footerWrap.hidden = targetTab === 'format';
+                if (targetTab === 'history') {
+                    descriptionHistory.renderCurrent();
                 }
+
+                // Toggle footer
+                this._syncFooterVisibility();
             });
         });
 
@@ -549,6 +650,198 @@ export class EditDescriptionPopup {
         return descriptionTextarea ? descriptionTextarea.value.trim() : '';
     }
 
+    _getCurrentCharacter() {
+        const context = getContext();
+        const chid = context?.characterId;
+        if (chid === undefined || chid === null || chid === '') return null;
+        return context?.characters?.[chid] ?? null;
+    }
+
+    _applyHistoryValue(value) {
+        const textarea = document.getElementById('description_textarea');
+        const character = this._getCurrentCharacter();
+        if (!textarea || !character) {
+            console.warn('[GuidedGenerations] Cannot revert: description textarea or character is unavailable.');
+            return false;
+        }
+        if (textarea.value === value) return null;
+
+        textarea.value = value;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+
+        this._clearDiffState();
+        this._refreshDescriptionDisplay();
+        return true;
+    }
+
+    _syncFooterVisibility() {
+        const activeTab = this.popupElement?.querySelector('.gg-tab-btn.active')?.dataset.tab || 'normal';
+        const footer = this.popupElement?.querySelector('.gg-popup-footer-wrap');
+        if (footer) footer.hidden = activeTab === 'format' || activeTab === 'history';
+    }
+
+    _restoreDescriptionAfterFailedGeneration(textarea, value, character) {
+        if (!textarea || typeof value !== 'string' || !character || textarea.value) return;
+        const currentCharacter = this._getCurrentCharacter();
+        if (currentCharacter && character.avatar !== currentCharacter.avatar) return;
+        textarea.value = value;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        if (character) character.description = value;
+    }
+
+    _openHistoryCompare({ entry, key, character } = {}) {
+        const textarea = document.getElementById('description_textarea');
+        const currentCharacter = this._getCurrentCharacter();
+        if (!textarea || !currentCharacter || !entry) {
+            alert('Open the Character Editor to compare this snapshot.');
+            return;
+        }
+        if (key && currentCharacter.avatar !== key) {
+            alert('Open this character in the Character Editor to compare its history.');
+            return;
+        }
+
+        this._ensureHistoryComparePopup();
+        const currentText = textarea.value;
+        const targetText = String(entry.value ?? '');
+        this.compareState = {
+            value: targetText,
+            avatar: currentCharacter.avatar,
+            entryId: entry.id,
+        };
+
+        const meta = this.comparePopup.querySelector('#ggDescCompareMeta');
+        if (meta) {
+            meta.innerHTML = `Character <strong>${escapeHtml(currentCharacter.name || currentCharacter.avatar)}</strong> - snapshot ${escapeHtml(new Date(entry.ts).toLocaleString())} (${escapeHtml(historyModeLabel(entry.mode))})`;
+        }
+        const currentPanel = this.comparePopup.querySelector('#ggDescCompareCurrent');
+        if (currentPanel) currentPanel.textContent = currentText || '(empty)';
+        const currentLines = this.comparePopup.querySelector('#ggDescCompareCurrentLines');
+        if (currentLines) {
+            const count = currentText ? currentText.split('\n').length : 0;
+            currentLines.textContent = `${count} line${count === 1 ? '' : 's'}`;
+        }
+
+        const diff = computeLineDiff(currentText, targetText);
+        const hasChanges = diff.some(item => item.type !== 'unchanged');
+        const diffEl = this.comparePopup.querySelector('#ggDescCompareDiff');
+        if (diffEl) {
+            diffEl.innerHTML = hasChanges
+                ? renderDiffHtml(diff, { showHeader: false })
+                : '<div class="gg-desc-history-empty">No differences. The description already matches this snapshot.</div>';
+        }
+        const revertButton = this.comparePopup.querySelector('#ggDescCompareRevert');
+        if (revertButton) revertButton.disabled = !hasChanges;
+
+        this.comparePopup.style.display = 'flex';
+        this.comparePopup.setAttribute('aria-hidden', 'false');
+    }
+
+    _ensureHistoryComparePopup() {
+        if (this.comparePopup) return;
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = `
+            <div id="ggDescHistoryComparePopup" class="gg-popup gg-editor-popup" role="dialog" aria-modal="true" aria-labelledby="ggDescCompareTitle" aria-hidden="true">
+                <div class="gg-popup-content gg-editor-dialog gg-desc-history-all-dialog gg-desc-compare-dialog">
+                    <div class="gg-popup-header">
+                        <div class="gg-editor-title-group">
+                            <span class="gg-editor-title-icon" aria-hidden="true">
+                                <i class="fa-solid fa-code-compare"></i>
+                            </span>
+                            <div>
+                                <span class="gg-editor-eyebrow">Edit Description</span>
+                                <h2 id="ggDescCompareTitle">Compare History</h2>
+                                <p>See what reverting to this snapshot would remove and add.</p>
+                            </div>
+                        </div>
+                        <button type="button" class="gg-popup-close" aria-label="Close compare view">
+                            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                    <div class="gg-popup-body gg-editor-body">
+                        <div id="ggDescCompareMeta" class="gg-desc-compare-meta"></div>
+                        <div class="gg-desc-compare-grid">
+                            <section class="gg-desc-compare-panel">
+                                <div class="gg-desc-compare-panel-head">
+                                    <span>Current</span>
+                                    <span id="ggDescCompareCurrentLines" class="gg-desc-compare-panel-meta">0 lines</span>
+                                </div>
+                                <pre id="ggDescCompareCurrent" class="gg-desc-compare-text"></pre>
+                            </section>
+                            <section class="gg-desc-compare-panel">
+                                <div class="gg-desc-compare-panel-head">
+                                    <span>History checking</span>
+                                    <span class="gg-desc-compare-legend">
+                                        <span><span class="gg-diff-legend-color gg-diff-legend-removed"></span>Will remove</span>
+                                        <span><span class="gg-diff-legend-color gg-diff-legend-added"></span>Will add</span>
+                                    </span>
+                                </div>
+                                <div id="ggDescCompareDiff" class="gg-diff-view gg-desc-compare-diff"></div>
+                            </section>
+                        </div>
+                        <p class="gg-desc-compare-note">Red lines exist only in Current and will be removed by reverting. Green lines exist only in the selected snapshot and will be added.</p>
+                    </div>
+                    <div class="gg-popup-footer-wrap gg-editor-footer-wrap">
+                        <div class="gg-editor-footer-note">
+                            <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+                            <span>Reverting does not create a new history snapshot.</span>
+                        </div>
+                        <div class="gg-popup-footer">
+                            <button type="button" id="ggDescCompareClose" class="gg-button gg-button-quiet">Close</button>
+                            <button type="button" id="ggDescCompareRevert" class="gg-button gg-button-primary gg-editor-action-button">
+                                <i class="fa-solid fa-arrow-rotate-left" aria-hidden="true"></i>
+                                <span>Revert to this snapshot</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        this.comparePopup = wrapper.firstElementChild;
+        document.body.appendChild(this.comparePopup);
+
+        this.comparePopup.querySelector('.gg-popup-close')?.addEventListener('click', () => this._closeHistoryCompare());
+        this.comparePopup.querySelector('#ggDescCompareClose')?.addEventListener('click', () => this._closeHistoryCompare());
+        this.comparePopup.querySelector('#ggDescCompareRevert')?.addEventListener('click', () => this._revertFromCompare());
+        this.comparePopup.addEventListener('click', event => {
+            if (event.target === this.comparePopup) this._closeHistoryCompare();
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && this.comparePopup?.getAttribute('aria-hidden') === 'false') {
+                event.stopPropagation();
+                this._closeHistoryCompare();
+            }
+        }, true);
+    }
+
+    _closeHistoryCompare() {
+        if (!this.comparePopup) return;
+        this.comparePopup.style.display = 'none';
+        this.comparePopup.setAttribute('aria-hidden', 'true');
+    }
+
+    _revertFromCompare() {
+        const state = this.compareState;
+        if (!state) return;
+        const currentCharacter = this._getCurrentCharacter();
+        if (!currentCharacter || currentCharacter.avatar !== state.avatar) {
+            alert('Open the same character in the Character Editor to revert.');
+            return;
+        }
+        const applied = this._applyHistoryValue(state.value);
+        if (applied === true) {
+            this._closeHistoryCompare();
+            descriptionHistory.closeAll();
+            globalThis.toastr?.success?.('Description reverted.');
+        } else if (applied === null) {
+            alert('The description already matches this snapshot.');
+        } else {
+            alert('Could not revert. Open the Character Editor and try again.');
+        }
+    }
+
     /**
      * Refresh the current description display in the popup
      */
@@ -603,6 +896,7 @@ export class EditDescriptionPopup {
         this._pendingGeneratedDescription = null;
         this._isDiffMode = false;
         this._isPreviewMode = false;
+        this._pendingCharacter = null;
 
         // Restore heading
         const heading = this.popupElement?.querySelector('.gg-current-desc-section h3');
@@ -720,6 +1014,8 @@ export class EditDescriptionPopup {
         this._refreshDescriptionDisplay();
         this._updateInstructionCount();
         this._setInstructionError(false);
+        this._syncFooterVisibility();
+        descriptionHistory.renderCurrent();
         this.popupElement.style.display = 'flex';
         this.popupElement.setAttribute('aria-hidden', 'false');
         const canAutoFocus = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
@@ -752,6 +1048,7 @@ export class EditDescriptionPopup {
      * Close the popup
      */
     close() {
+        this._closeHistoryCompare();
         if (this.popupElement) {
             this.popupElement.style.display = 'none';
             this.popupElement.setAttribute('aria-hidden', 'true');
@@ -778,7 +1075,9 @@ export class EditDescriptionPopup {
 
         // Save previous description BEFORE closing
         const descriptionTextarea = document.getElementById('description_textarea');
+        const previousDescriptionRaw = descriptionTextarea ? descriptionTextarea.value : '';
         const currentDescription = descriptionTextarea ? descriptionTextarea.value.trim() : '';
+        this._pendingCharacter = this._getCurrentCharacter();
 
         const isEditExisting = mode === 'editExisting';
         if (isEditExisting) {
@@ -926,6 +1225,10 @@ export class EditDescriptionPopup {
             }
             if (!generatedDescription || generatedDescription.trim() === '') {
                 console.error('[GuidedGenerations] No description text received.');
+                if (!isEditExisting) {
+                    this._restoreDescriptionAfterFailedGeneration(descriptionTextarea, previousDescriptionRaw, this._pendingCharacter);
+                }
+                this._pendingCharacter = null;
                 return;
             }
 
@@ -934,6 +1237,18 @@ export class EditDescriptionPopup {
                 const newDescription = generatedDescription.trim();
                 this._enterPreviewMode(this._previousDescription, newDescription);
             } else {
+                const targetCharacter = this._pendingCharacter;
+                const currentCharacter = this._getCurrentCharacter();
+                if (targetCharacter && targetCharacter.avatar !== currentCharacter?.avatar) {
+                    console.warn('[GuidedGenerations] Active character changed during description generation; result discarded.');
+                    if (typeof targetCharacter.description === 'string') {
+                        targetCharacter.description = previousDescriptionRaw;
+                    }
+                    alert('The active character changed while the description was being generated, so the result was not applied.');
+                    this._pendingCharacter = null;
+                    return;
+                }
+
                 // Put the result in the textarea immediately
                 if (descriptionTextarea) {
                     descriptionTextarea.value = generatedDescription;
@@ -943,14 +1258,23 @@ export class EditDescriptionPopup {
                     descriptionTextarea.dispatchEvent(inputEvent);
                     descriptionTextarea.dispatchEvent(new Event('change', { bubbles: true }));
 
+                    if (currentCharacter || targetCharacter) {
+                        descriptionHistory.record(currentCharacter || targetCharacter, previousDescriptionRaw, generatedDescription);
+                    }
+
                     debugLog('[EditDescription] Description updated successfully.');
                 } else {
                     console.error('[GuidedGenerations] #description_textarea not found in DOM.');
                 }
+                this._pendingCharacter = null;
             }
 
         } catch (error) {
             console.error('[GuidedGenerations] Error executing Edit Description request:', error);
+            if (!isEditExisting) {
+                this._restoreDescriptionAfterFailedGeneration(descriptionTextarea, previousDescriptionRaw, this._pendingCharacter);
+            }
+            this._pendingCharacter = null;
         }
     }
 }

@@ -18,6 +18,7 @@ import {
     openRequestPromptSlot,
     closeRequestPromptSlot,
 } from '../promptManager/store.js';
+import { applyOutgoingTextObfuscation } from '../textObfuscation/outgoing.js';
 
 const TEXT_API_IDS = new Set([
     'textgenerationwebui',
@@ -864,6 +865,18 @@ export async function requestCompletion({
         }
     }
 
+    // Tool requests can bypass SillyTavern's prompt-ready event (direct service
+    // calls, text completion), so apply Unicode Sensitive Words here as well.
+    const obfuscated = applyOutgoingTextObfuscation({
+        messages: mode === 'chat' ? requestData.messages : null,
+        prompt: mode === 'text' ? requestData.prompt : '',
+    });
+    if (mode === 'chat') requestData.messages = obfuscated.messages;
+    else requestData.prompt = obfuscated.prompt;
+    if (obfuscated.replacements) {
+        debugLog(`[${extensionName}] Unicode Sensitive Words applied to ${mode} request (${obfuscated.replacements} replacement(s)) ${debugLabel ? `(${debugLabel})` : ''}`);
+    }
+
     const options = {
         presetName: resolvedPresetName || undefined,
         instructName: profile?.instruct || undefined,
@@ -917,7 +930,7 @@ export async function requestCompletion({
             overridePayload.stream = false;
             debugLog(`[${extensionName}] requestCompletion: using ConnectionManagerRequestService for profile "${resolvedProfileName}" includePreset=false`);
             emitGenerationEvent(context, 'GENERATION_STARTED', { source: extensionName });
-            const promptPayload = mode === 'chat' ? requestData.messages : typeof prompt === 'string' ? prompt : '';
+            const promptPayload = mode === 'chat' ? requestData.messages : (typeof requestData.prompt === 'string' ? requestData.prompt : '');
             const result = await connectionManagerService.sendRequest(
                 profile.id,
                 promptPayload,

@@ -855,17 +855,15 @@
 }
 
 .gg-diff-added {
-    background-color: rgba(46, 160, 67, 0.2);
+    background-color: rgba(46, 160, 67, 0.16);
     border-left-color: #2ea043;
-    color: #3fb950;
+    color: var(--SmartThemeBodyColor);
 }
 
 .gg-diff-removed {
-    background-color: rgba(248, 81, 73, 0.2);
+    background-color: rgba(248, 81, 73, 0.16);
     border-left-color: #f85149;
-    color: #f85149;
-    text-decoration: line-through;
-    opacity: 0.75;
+    color: var(--SmartThemeBodyColor);
 }
 
 .gg-diff-unchanged {
@@ -879,18 +877,27 @@
 }
 
 .gg-diff-word-added {
-    background-color: rgba(46, 160, 67, 0.4);
-    color: #3fb950;
+    background-color: rgba(46, 160, 67, 0.38);
+    color: var(--SmartThemeBodyColor);
+    font-weight: 600;
     border-radius: 2px;
     padding: 0 2px;
 }
 
 .gg-diff-word-removed {
-    background-color: rgba(248, 81, 73, 0.4);
-    color: #f85149;
-    text-decoration: line-through;
+    background-color: rgba(248, 81, 73, 0.38);
+    color: var(--SmartThemeBodyColor);
+    font-weight: 600;
     border-radius: 2px;
     padding: 0 2px;
+}
+
+.gg-diff-added .gg-diff-prefix {
+    color: #7ee28b;
+}
+
+.gg-diff-removed .gg-diff-prefix {
+    color: #ff8a84;
 }
 
 .gg-diff-prefix {
