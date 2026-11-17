@@ -655,7 +655,10 @@ export function ensureUbSettingsEntry(onChanged = null) {
                 <button type="button" class="menu_button gg-native-ub-configure"><i class="fa-solid fa-sliders"></i> Configure UB</button>
             </div>
         </div>`;
-    container.insertBefore(section, container.firstChild);
+    // Park generated sections after the static panel so the hero stays on top.
+    const root = container.querySelector(':scope > .gg-settings-root');
+    if (root) root.insertAdjacentElement('afterend', section);
+    else container.insertBefore(section, container.firstChild);
 
     const summary = section.querySelector('.gg-native-ub-summary');
     const enable = section.querySelector('.gg-native-ub-enable');

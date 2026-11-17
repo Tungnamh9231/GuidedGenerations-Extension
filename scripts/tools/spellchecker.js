@@ -47,6 +47,7 @@ const spellchecker = async () => {
                 profileName: profileValue,
                 presetName: presetValue,
                 prompt: filledPrompt,
+                promptKey: 'promptSpellchecker',
                 debugLabel: 'spellchecker',
                 includeChatHistory: false,
                 includeIdentityContext: false,

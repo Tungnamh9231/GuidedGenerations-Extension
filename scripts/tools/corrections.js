@@ -15,7 +15,7 @@ import {
     setSendButtonState,
 } from '../persistentGuides/guideExports.js';
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
-import { PromptTabManager } from './promptTabManager.js';
+import { registerInjectionPromptSlot } from '../promptManager/store.js';
 
 let lastCorrectionInstruction = '';
 
@@ -71,88 +71,96 @@ class CorrectionsPopup {
 
         const existing = document.getElementById(this.popupId);
         if (!existing) {
-            this.promptTabManager = new PromptTabManager('corrections', [
-                { 
-                    key: 'selectedTextTask', 
-                    label: 'Selected Text Task', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User correction instruction' },
-                        { short: 'bm', long: 'baseMessage', desc: 'The full base message' },
-                        { short: 'st', long: 'selectedText', desc: 'The text highlighted by the user' }
-                    ]
-                },
-                { 
-                    key: 'fullMessageTask', 
-                    label: 'Full Message Task', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User correction instruction' },
-                        { short: 'bm', long: 'baseMessage', desc: 'The full base message' }
-                    ]
-                }
-            ]);
-            const promptTabHtml = this.promptTabManager.getHtml();
-
             const popupHtml = `
-                <div id="${this.popupId}" class="gg-popup" style="display: none;">
-                    <div class="gg-popup-content gg-corrections-popup-content">
+                <div id="${this.popupId}" class="gg-popup gg-editor-popup" role="dialog" aria-modal="true" aria-labelledby="gg-corrections-title" aria-hidden="true" style="display: none;">
+                    <div class="gg-popup-content gg-editor-dialog gg-corrections-dialog">
                         <div class="gg-popup-header">
-                            <h2>Corrections</h2>
-                            <span class="gg-popup-close">&times;</span>
-                        </div>
-                        <div class="gg-popup-body" style="padding-top: 0;">
-                            <div class="gg-tabs" role="tablist" style="margin-bottom: 15px; margin-top: 15px;">
-                                <button type="button" id="gg-corrections-tab-normal-btn" class="gg-tab-btn active" data-tab="normal" role="tab" aria-selected="true" aria-controls="gg-corrections-tab-normal">
-                                    <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
-                                    <span>Correction</span>
-                                </button>
-                                <button type="button" id="gg-corrections-tab-prompts-btn" class="gg-tab-btn" data-tab="prompts" role="tab" aria-selected="false" aria-controls="gg-corrections-tab-prompts">
-                                    <i class="fa-solid fa-terminal" aria-hidden="true"></i>
-                                    <span>Prompt</span>
-                                </button>
+                            <div class="gg-editor-title-group">
+                                <span class="gg-editor-title-icon" aria-hidden="true">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </span>
+                                <div>
+                                    <span class="gg-editor-eyebrow">Precision editing</span>
+                                    <h2 id="gg-corrections-title">Corrections</h2>
+                                    <p>Rewrite a message — or just the part you highlight.</p>
+                                </div>
                             </div>
-                            
-                            <div id="gg-corrections-tab-normal" class="gg-tab-content active" role="tabpanel" aria-labelledby="gg-corrections-tab-normal-btn">
-                                <div class="gg-popup-section gg-corrections-nav">
-                                    <div class="gg-corrections-nav-row">
-                                        <button type="button" id="ggCorrectionsPrevMessage" class="gg-button gg-button-secondary">Older</button>
-                                        <div id="ggCorrectionsMessageInfo" class="gg-corrections-info">Message</div>
-                                        <button type="button" id="ggCorrectionsNextMessage" class="gg-button gg-button-secondary">Newer</button>
-                                    </div>
-                                    <div class="gg-corrections-nav-row">
-                                        <button type="button" id="ggCorrectionsPrevSwipe" class="gg-button gg-button-secondary">Prev Swipe</button>
-                                        <div id="ggCorrectionsSwipeInfo" class="gg-corrections-info">Swipe</div>
-                                        <button type="button" id="ggCorrectionsNextSwipe" class="gg-button gg-button-secondary">Next Swipe</button>
+                            <button type="button" class="gg-popup-close" aria-label="Close Corrections">
+                                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <div class="gg-popup-body gg-editor-body">
+                            <section class="gg-popup-section gg-editor-card">
+                                <div class="gg-editor-section-heading">
+                                    <div>
+                                        <h3>Choose target</h3>
+                                        <p>Step through messages and swipes to pick what to correct.</p>
                                     </div>
                                 </div>
-                                <div class="gg-popup-section">
-                                    <label for="ggCorrectionsMessage">Selected Message:</label>
-                                    <div class="gg-corrections-message-wrap">
-                                        <div id="ggCorrectionsMessageOverlay" class="gg-corrections-message-overlay"></div>
-                                        <textarea id="ggCorrectionsMessage" class="gg-corrections-message" rows="10" readonly></textarea>
+                                <div class="gg-corr-nav-grid">
+                                    <div class="gg-corr-nav-group">
+                                        <button type="button" id="ggCorrectionsPrevMessage" class="gg-corr-step" title="Older message" aria-label="Older message"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+                                        <span id="ggCorrectionsMessageInfo" class="gg-corr-info">Message</span>
+                                        <button type="button" id="ggCorrectionsNextMessage" class="gg-corr-step" title="Newer message" aria-label="Newer message"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
                                     </div>
-                                    <p class="gg-popup-note">Tip: highlight any part of this message to only edit the selection.</p>
-                                    <div id="ggCorrectionsSelectionInfo" class="gg-popup-note">No recorded selection.</div>
+                                    <div class="gg-corr-nav-group">
+                                        <button type="button" id="ggCorrectionsPrevSwipe" class="gg-corr-step" title="Previous swipe" aria-label="Previous swipe"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+                                        <span id="ggCorrectionsSwipeInfo" class="gg-corr-info">Swipe</span>
+                                        <button type="button" id="ggCorrectionsNextSwipe" class="gg-corr-step" title="Next swipe" aria-label="Next swipe"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+                                    </div>
                                 </div>
-                                <div class="gg-popup-section">
-                                    <label for="ggCorrectionsInstruction">Correction Instructions:</label>
-                                    <textarea id="ggCorrectionsInstruction" rows="4" placeholder="Describe what should be changed..."></textarea>
+                            </section>
+
+                            <section class="gg-popup-section gg-editor-card">
+                                <div class="gg-editor-section-heading">
+                                    <div>
+                                        <label for="ggCorrectionsMessage" class="gg-editor-section-label">Selected message</label>
+                                        <p>Highlight part of it to rewrite only that part; leave it untouched to rewrite the whole message.</p>
+                                    </div>
+                                    <span id="ggCorrectionsSelectionInfo" class="gg-editor-meta">No recorded selection.</span>
                                 </div>
-                                <div class="gg-popup-section gg-setting-inline">
+                                <div class="gg-corrections-message-wrap">
+                                    <div id="ggCorrectionsMessageOverlay" class="gg-corrections-message-overlay"></div>
+                                    <textarea id="ggCorrectionsMessage" class="gg-corrections-message" rows="10" readonly aria-label="Selected message"></textarea>
+                                </div>
+                            </section>
+
+                            <section class="gg-popup-section gg-editor-card">
+                                <div class="gg-editor-section-heading">
+                                    <div>
+                                        <label for="ggCorrectionsInstruction" class="gg-editor-section-label">What should change?</label>
+                                        <p>Describe the fix in plain words.</p>
+                                    </div>
+                                    <span class="gg-editor-required">Required</span>
+                                </div>
+                                <textarea id="ggCorrectionsInstruction" class="text_pole gg-editor-textarea" rows="5" placeholder="Example: Fix the grammar and keep the original tone..."></textarea>
+                                <div class="gg-editor-field-footer">
+                                    <div class="gg-editor-suggestions" aria-label="Quick instruction suggestions">
+                                        <button type="button" class="gg-suggestion-chip" data-instruction="Fix spelling and grammar mistakes.">Fix grammar</button>
+                                        <button type="button" class="gg-suggestion-chip" data-instruction="Make the message more concise without losing meaning.">Make concise</button>
+                                        <button type="button" class="gg-suggestion-chip" data-instruction="Improve the wording while keeping the original tone.">Polish wording</button>
+                                    </div>
+                                    <span id="ggCorrectionsInstructionCount" class="gg-editor-meta">0 characters</span>
+                                </div>
+                                <p id="ggCorrectionsInstructionError" class="gg-editor-error" role="alert" hidden>Please enter an instruction.</p>
+                                <div class="gg-checkbox-row gg-corr-preset">
                                     <input id="ggCorrectionsSendWithoutPreset" type="checkbox">
                                     <label for="ggCorrectionsSendWithoutPreset">Send without preset</label>
                                 </div>
-                                <div class="gg-popup-section gg-popup-note">
-                                    When selecting text, the model will only rewrite the highlighted part. If nothing is selected, the entire message is rewritten.
-                                </div>
-                            </div>
-                            
-                            <div id="gg-corrections-tab-prompts" class="gg-tab-content" role="tabpanel" aria-labelledby="gg-corrections-tab-prompts-btn" hidden>
-                                ${promptTabHtml}
-                            </div>
+                            </section>
                         </div>
-                        <div class="gg-popup-footer">
-                            <button type="button" id="ggCorrectionsApply" class="gg-button gg-button-primary">Apply Correction</button>
-                            <button type="button" id="ggCorrectionsCancel" class="gg-button gg-button-secondary">Cancel</button>
+                        <div class="gg-popup-footer-wrap gg-editor-footer-wrap">
+                            <div class="gg-editor-footer-note">
+                                <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                                <span>The result is added as a new swipe, so the original message stays intact.</span>
+                            </div>
+                            <div class="gg-popup-footer">
+                                <button type="button" id="ggCorrectionsCancel" class="gg-button gg-button-quiet">Cancel</button>
+                                <button type="button" id="ggCorrectionsApply" class="gg-button gg-button-primary">
+                                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                    <span>Apply Correction</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -167,9 +175,6 @@ class CorrectionsPopup {
         }
 
         this.setupEventListeners();
-        if (this.promptTabManager) {
-            this.promptTabManager.setupEventListeners(this.popupElement);
-        }
         this.initialized = true;
     }
 
@@ -189,36 +194,6 @@ class CorrectionsPopup {
         closeButton?.addEventListener('click', () => this.close());
         cancelButton?.addEventListener('click', () => this.close());
         applyButton?.addEventListener('click', () => this.applyCorrection());
-        
-        // Tab switching logic
-        const tabBtns = this.popupElement.querySelectorAll('.gg-tab-btn');
-        const tabContents = this.popupElement.querySelectorAll('.gg-tab-content');
-        const footer = this.popupElement.querySelector('.gg-popup-footer');
-        tabBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const targetTab = e.currentTarget.getAttribute('data-tab');
-                
-                // Update buttons
-                tabBtns.forEach(b => {
-                    b.classList.remove('active');
-                    b.setAttribute('aria-selected', 'false');
-                });
-                e.currentTarget.classList.add('active');
-                e.currentTarget.setAttribute('aria-selected', 'true');
-                
-                // Update contents
-                tabContents.forEach(content => {
-                    const isActive = content.id === `gg-corrections-tab-${targetTab}`;
-                    content.hidden = !isActive;
-                    content.classList.toggle('active', isActive);
-                });
-                
-                // Toggle footer for prompts tab
-                if (footer) {
-                    footer.style.display = targetTab === 'prompts' ? 'none' : 'flex';
-                }
-            });
-        });
 
         prevMessageButton?.addEventListener('click', () => this.changeMessage(-1));
         nextMessageButton?.addEventListener('click', () => this.changeMessage(1));
@@ -259,6 +234,55 @@ class CorrectionsPopup {
             const syncOverlayScroll = () => this.syncOverlayScroll(messageTextarea);
             messageTextarea.addEventListener('scroll', syncOverlayScroll, { passive: true });
         }
+
+        const instructionTextarea = this.popupElement.querySelector('#ggCorrectionsInstruction');
+        instructionTextarea?.addEventListener('input', () => {
+            this._updateInstructionCount();
+            this._setInstructionError(false);
+        });
+        instructionTextarea?.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                this.applyCorrection();
+            }
+        });
+
+        this.popupElement.querySelectorAll('.gg-suggestion-chip').forEach((chip) => {
+            chip.addEventListener('click', () => {
+                if (!instructionTextarea) return;
+                const suggestion = chip.dataset.instruction || '';
+                const currentValue = instructionTextarea.value.trim();
+                instructionTextarea.value = currentValue ? `${currentValue}\n${suggestion}` : suggestion;
+                instructionTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+                instructionTextarea.focus();
+            });
+        });
+
+        this.popupElement.addEventListener('click', (event) => {
+            if (event.target === this.popupElement) this.close();
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && this.popupElement?.getAttribute('aria-hidden') === 'false') {
+                this.close();
+            }
+        });
+    }
+
+    _updateInstructionCount() {
+        const textarea = this.popupElement?.querySelector('#ggCorrectionsInstruction');
+        const counter = this.popupElement?.querySelector('#ggCorrectionsInstructionCount');
+        if (textarea && counter) {
+            const count = textarea.value.length;
+            counter.textContent = `${count} ${count === 1 ? 'character' : 'characters'}`;
+        }
+    }
+
+    _setInstructionError(visible) {
+        const textarea = this.popupElement?.querySelector('#ggCorrectionsInstruction');
+        const error = this.popupElement?.querySelector('#ggCorrectionsInstructionError');
+        textarea?.classList.toggle('gg-editor-input-error', visible);
+        if (error) error.hidden = !visible;
     }
 
     open() {
@@ -287,13 +311,17 @@ class CorrectionsPopup {
         }
 
         this.updateMessageDisplay();
-        this.popupElement.style.display = 'block';
+        this._updateInstructionCount();
+        this._setInstructionError(false);
+        this.popupElement.style.display = 'flex';
+        this.popupElement.setAttribute('aria-hidden', 'false');
         document.body.classList.add('gg-popup-open');
     }
 
     close() {
         if (this.popupElement) {
             this.popupElement.style.display = 'none';
+            this.popupElement.setAttribute('aria-hidden', 'true');
             document.body.classList.remove('gg-popup-open');
         }
     }
@@ -456,6 +484,9 @@ class CorrectionsPopup {
         const after = escapeHtml(text.slice(end));
         overlay.innerHTML = `${before}<span class="gg-corrections-selection">${selected}</span>${after}`;
         overlay.style.display = 'block';
+        // While hidden the overlay has no layout, so scroll offsets set earlier
+        // were discarded — copy the textarea's position now to avoid a jump.
+        this.syncOverlayScroll(this.popupElement?.querySelector('#ggCorrectionsMessage'));
     }
 
     syncOverlayScroll(textarea) {
@@ -516,7 +547,8 @@ class CorrectionsPopup {
 
         const instruction = instructionTextarea?.value?.trim() || '';
         if (!instruction) {
-            alert('Please provide correction instructions.');
+            this._setInstructionError(true);
+            instructionTextarea?.focus();
             return;
         }
 
@@ -533,6 +565,7 @@ class CorrectionsPopup {
         const baseMessage = swipes[this.swipeIndex] ?? messageData.mes ?? '';
         const { start: selectionStart, end: selectionEnd, hasSelection } = this.resolveSelection(baseMessage, messageTextarea);
         const selectedText = hasSelection ? baseMessage.slice(selectionStart, selectionEnd) : '';
+        const taskPromptKey = hasSelection ? 'corrections.selectedTextTask' : 'corrections.fullMessageTask';
 
         const profileKey = 'profileCorrections';
         const presetKey = 'presetCorrections';
@@ -544,9 +577,9 @@ class CorrectionsPopup {
         });
         const filledPrompt = fillPromptTemplate(promptTemplate, { input: instruction });
 
-        const taskTemplate = hasSelection
-            ? await getPromptValue('corrections.selectedTextTask', '')
-            : await getPromptValue('corrections.fullMessageTask', '');
+        const taskTemplate = await getPromptValue(taskPromptKey, '', {
+            settings: extension_settings[extensionName],
+        });
         const promptForModel = fillPromptTemplate(taskTemplate, {
             instruction: filledPrompt,
             historyBlock: '', // No history block in prompt template
@@ -572,6 +605,7 @@ class CorrectionsPopup {
                         profileName: profileValue,
                         presetName: targetPreset,
                         prompt: promptForModel,
+                        promptKey: taskPromptKey,
                         debugLabel: 'corrections',
                         includeChatHistory: false,
                         includeIdentityContext: true,
@@ -587,6 +621,7 @@ class CorrectionsPopup {
                     } else {
                         const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
                         const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
+                        registerInjectionPromptSlot('script_inject_correctionsInstruct', taskPromptKey);
                         setTemporaryInjection(context, 'correctionsInstruct', promptForModel, { role });
 
                         const originalChat = [...(context.chat || [])];

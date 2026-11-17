@@ -10,11 +10,12 @@ import { getContext, extension_settings, extensionName, debugLog, createTrackerN
  *   isAuto?: boolean,
  *   previousInjectionAction?: 'move' | 'flush' | 'none'
  *   raw?: boolean,
- *   skipSituationalTracker?: boolean
+ *   skipSituationalTracker?: boolean,
+ *   promptKey?: string
  * }} options
  * @returns {Promise<string|null>} Returns pipe output or null on failure.
  */
-export async function runGuideScript({ guideId, genAs = '', genCommandSuffix = '', finalCommand = '', isAuto = false, previousInjectionAction = 'none', raw = false, skipSituationalTracker = false }) {
+export async function runGuideScript({ guideId, genAs = '', genCommandSuffix = '', finalCommand = '', isAuto = false, previousInjectionAction = 'none', raw = false, skipSituationalTracker = false, promptKey = '' }) {
     // ENHANCED DEBUGGING: Track when runGuideScript is called
     debugLog(`[AUTOTRIGGER-DEBUG] runGuideScript called with:`, {
         guideId: guideId,
@@ -95,6 +96,7 @@ export async function runGuideScript({ guideId, genAs = '', genCommandSuffix = '
                     profileName: profileValue,
                     presetName: presetValue,
                     prompt,
+                    promptKey,
                     debugLabel: `runGuide:${guideId}`,
                     includeChatHistory: !raw,
                 });

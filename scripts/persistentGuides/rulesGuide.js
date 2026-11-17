@@ -24,7 +24,8 @@ const rulesGuide = async (isAuto = false) => {
         finalCommand,
         isAuto,
         previousInjectionAction: 'flush',
-        raw: extension_settings[extensionName]?.rawPromptRules ?? false
+        raw: extension_settings[extensionName]?.rawPromptRules ?? false,
+        promptKey: 'promptRules'
     });
 };
 

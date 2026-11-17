@@ -2,94 +2,48 @@
 
 import { extensionName, loadSettings, updateSettingsUI, addSettingsEventListeners, defaultSettings, debugLog, debugWarn, renderExtensionTemplateAsync, getExtensionManifest, debugProfileSystem } from './persistentGuides/guideExports.js'; // Import from central hub
 
-const DEFAULT_PROMPTS_URL = 'https://raw.githubusercontent.com/Tungnamh9231/GuidedGenerations-Extension/develop/prompts.json';
 const INTERNAL_HELPER_PRESET_VALUE = '__GG_INTERNAL_HELPER__';
-const PROMPT_SETTING_KEYS = [
-    'promptClothes',
-    'promptState',
-    'promptThinking',
-    'promptSituational',
-    'promptRules',
-    'promptCorrections',
-    'promptSeparatedThinking',
-    'promptSpellchecker',
-    'promptImpersonate1st',
-    'promptImpersonate2nd',
-    'promptImpersonate3rd',
-    'promptGuidedResponse',
-    'promptGuidedSwipe',
-    'promptGuidedContinue',
-    'customAutoGuidePrompt',
-];
 
-function getPromptOverrideSettingKey(promptKey) {
-    return `use${promptKey.charAt(0).toUpperCase()}${promptKey.slice(1)}SettingOverride`;
-}
+const SETTINGS_ROW_SELECTOR = '.gg-toggle, .gg-prompt-item, .gg-assign-row, .gg-field';
+const SETTINGS_GROUP_SELECTOR = '.gg-card, .gg-details, .gg-prompt-group, .gg-panel';
 
-async function downloadDefaultPromptsFile(event) {
-    event?.preventDefault();
-    event?.stopPropagation();
+/**
+ * Client-side filter over the settings panel. Rows that do not match the query
+ * are hidden, then any card/group whose rows are all hidden is hidden too, so
+ * the panel does not keep empty boxes around.
+ * @param {HTMLElement} container The extension settings container.
+ */
+function setupSettingsSearch(container) {
+    const input = container.querySelector('#gg_settingsSearch');
+    const root = container.querySelector('.gg-settings-root');
+    if (!input || !root) return;
 
-    try {
-        const response = await fetch(DEFAULT_PROMPTS_URL, { cache: 'no-cache' });
-        if (!response.ok) {
-            throw new Error(`GitHub returned ${response.status}`);
-        }
+    const applyFilter = () => {
+        const query = input.value.trim().toLowerCase();
+        let visibleRows = 0;
 
-        const text = await response.text();
-        JSON.parse(text);
-
-        const blob = new Blob([text], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'prompts.json';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
-    } catch (error) {
-        console.error(`[${extensionName}] Failed to download default prompts.json:`, error);
-        alert(`Could not download default prompts.json: ${error.message || error}`);
-    }
-}
-
-function setupPromptOverrideToggles(container) {
-    for (const promptKey of PROMPT_SETTING_KEYS) {
-        const textarea = container.querySelector(`#gg_${promptKey}`);
-        if (!textarea) continue;
-
-        const overrideKey = getPromptOverrideSettingKey(promptKey);
-        if (container.querySelector(`#gg_${overrideKey}`)) continue;
-
-        const wrapper = document.createElement('label');
-        wrapper.style.display = 'inline-flex';
-        wrapper.style.alignItems = 'center';
-        wrapper.style.gap = '4px';
-        wrapper.style.marginTop = '4px';
-        wrapper.style.marginLeft = '8px';
-
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.id = `gg_${overrideKey}`;
-        checkbox.name = overrideKey;
-        checkbox.className = 'gg-setting-input';
-
-        wrapper.appendChild(checkbox);
-        wrapper.append('Use prompts.json');
-
-        textarea.insertAdjacentElement('afterend', wrapper);
-
-        // When the user edits the prompt, uncheck "Use prompts.json" so the
-        // edited internal value is used instead of the file. Persistence is
-        // handled by the delegated `change` listener in index.js; this only
-        // keeps the checkbox visual in sync while typing, before blur fires.
-        textarea.addEventListener('input', () => {
-            if (checkbox.checked) {
-                checkbox.checked = false;
-            }
+        root.querySelectorAll(SETTINGS_ROW_SELECTOR).forEach((row) => {
+            // Select option text would swamp the haystack, so assignment rows
+            // are matched on their feature label only.
+            const label = row.matches('.gg-assign-row') ? row.querySelector('.gg-assign-name') : null;
+            const haystack = label ? label.textContent : row.textContent;
+            const match = !query || haystack.toLowerCase().includes(query);
+            row.style.display = match ? '' : 'none';
+            if (match) visibleRows++;
         });
-    }
+
+        root.querySelectorAll(SETTINGS_GROUP_SELECTOR).forEach((group) => {
+            const inner = group.querySelectorAll(SETTINGS_ROW_SELECTOR);
+            if (!inner.length) return;
+            const anyVisible = Array.from(inner).some((el) => el.style.display !== 'none');
+            group.style.display = anyVisible || !query ? '' : 'none';
+        });
+
+        const noResults = root.querySelector('.gg-no-results');
+        if (noResults) noResults.hidden = !(query && visibleRows === 0);
+    };
+
+    input.addEventListener('input', applyFilter);
 }
 
 /**
@@ -133,7 +87,7 @@ export async function loadSettingsPanel() {
 
             setTimeout(async () => {
                 loadSettings();
-                setupPromptOverrideToggles(container);
+                setupSettingsSearch(container);
                 updateSettingsUI();
                 addSettingsEventListeners();
 
@@ -177,44 +131,15 @@ export async function loadSettingsPanel() {
                 });
 
 
-                const downloadDefaultPromptsButton = container.querySelector('#ggDownloadDefaultPrompts');
-                if (downloadDefaultPromptsButton) {
-                    downloadDefaultPromptsButton.addEventListener('click', downloadDefaultPromptsFile);
-                }
-
-                const exportCustomPromptsButton = container.querySelector('#ggExportCustomPrompts');
-                if (exportCustomPromptsButton) {
-                    exportCustomPromptsButton.addEventListener('click', async (event) => {
-                        event?.preventDefault();
-                        event?.stopPropagation();
+                const openPromptManagerButton = container.querySelector('#ggOpenPromptManager');
+                if (openPromptManagerButton) {
+                    openPromptManagerButton.addEventListener('click', async () => {
                         try {
-                            const { loadPromptCatalog } = await import('./utils/promptManager.js');
-                            const catalog = await loadPromptCatalog({ force: true });
-                            const newCatalog = JSON.parse(JSON.stringify(catalog));
-                            
-                            for (const promptKey of PROMPT_SETTING_KEYS) {
-                                const overrideKey = getPromptOverrideSettingKey(promptKey);
-                                const textarea = container.querySelector(`#gg_${promptKey}`);
-                                const checkbox = container.querySelector(`#gg_${overrideKey}`);
-                                
-                                if (textarea && checkbox && !checkbox.checked) {
-                                    newCatalog[promptKey] = textarea.value;
-                                }
-                            }
-                            
-                            const text = JSON.stringify(newCatalog, null, 2);
-                            const blob = new Blob([text], { type: 'application/json' });
-                            const url = URL.createObjectURL(blob);
-                            const link = document.createElement('a');
-                            link.href = url;
-                            link.download = 'prompts.json';
-                            document.body.appendChild(link);
-                            link.click();
-                            link.remove();
-                            URL.revokeObjectURL(url);
-                        } catch (err) {
-                            console.error('Error exporting custom prompts:', err);
-                            alert('Error exporting prompts: ' + err.message);
+                            const { openPromptManagerModal } = await import('./promptManager/modalView.js');
+                            openPromptManagerModal();
+                        } catch (error) {
+                            console.error(`[${extensionName}] Error opening the prompt manager:`, error);
+                            alert('Could not open the Prompt Manager: ' + (error?.message ?? error));
                         }
                     });
                 }

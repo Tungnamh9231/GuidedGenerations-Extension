@@ -31,7 +31,8 @@ const stateGuide = async (isAuto = false) => {
         finalCommand,
         isAuto,
         previousInjectionAction: 'move',
-        raw: extension_settings[extensionName]?.rawPromptState ?? false
+        raw: extension_settings[extensionName]?.rawPromptState ?? false,
+        promptKey: 'promptState'
     });
 };
 

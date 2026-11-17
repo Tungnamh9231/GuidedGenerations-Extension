@@ -49,6 +49,7 @@ const guidedImpersonate3rd = async () => {
                 profileName: profileValue,
                 presetName: presetValue,
                 prompt: filledPrompt,
+                promptKey: 'promptImpersonate3rd',
                 debugLabel: 'impersonate:3rd',
                 includeChatHistory: true,
                 includeIdentityContext: true,

@@ -13,6 +13,11 @@ import {
     setSendButtonState,
     getOpenAIPromptManagerHelpers,
 } from '../persistentGuides/guideExports.js';
+import { getPromptDefinition } from '../promptManager/registry.js';
+import {
+    openRequestPromptSlot,
+    closeRequestPromptSlot,
+} from '../promptManager/store.js';
 
 const TEXT_API_IDS = new Set([
     'textgenerationwebui',
@@ -644,6 +649,10 @@ export async function buildChatMessagesWithPromptManager(context, baseMessages, 
     // regardless of which preset is in use, so the LLM only sees the task prompt.
     const stripIdentityFromParams = !includeIdentityContext;
 
+    const { prompt = '', includeChatHistory = true, promptKey = '' } = options;
+    const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+    let requestSlot = '';
+
     try {
         if (preset) {
             Object.assign(helpers.oai_settings, preset);
@@ -656,8 +665,6 @@ export async function buildChatMessagesWithPromptManager(context, baseMessages, 
         }
 
         helpers.setupChatCompletionPromptManager(helpers.oai_settings);
-        const { prompt = '', includeChatHistory = true } = options;
-        const rawPrompt = typeof prompt === 'string' ? prompt.trim() : '';
         let resolvedBaseMessages = baseMessages;
         if (!Array.isArray(resolvedBaseMessages) || resolvedBaseMessages.length === 0) {
             resolvedBaseMessages = includeChatHistory
@@ -668,8 +675,17 @@ export async function buildChatMessagesWithPromptManager(context, baseMessages, 
         }
 
         if (rawPrompt) {
-            // setOpenAIMessages returns newest-first, so prepend the new prompt
-            resolvedBaseMessages = [{ role: 'user', content: rawPrompt }, ...(resolvedBaseMessages || [])];
+            // The feature's own prompt is placed by the extension Prompt Manager
+            // when its block is registered there; otherwise it becomes the newest
+            // user message exactly as before.
+            const definition = promptKey ? getPromptDefinition(promptKey) : null;
+            if (definition && !definition.prompt.textOnly && context) {
+                requestSlot = openRequestPromptSlot(context, promptKey, rawPrompt);
+            }
+            if (!requestSlot) {
+                // setOpenAIMessages returns newest-first, so prepend the new prompt
+                resolvedBaseMessages = [{ role: 'user', content: rawPrompt }, ...(resolvedBaseMessages || [])];
+            }
         }
 
         const resolvedExamples = Array.isArray(context?.messageExamples)
@@ -705,6 +721,7 @@ export async function buildChatMessagesWithPromptManager(context, baseMessages, 
     } catch (error) {
         debugWarn(`[${extensionName}] Failed to build messages with prompt manager:`, error);
     } finally {
+        closeRequestPromptSlot(context, requestSlot);
         Object.assign(helpers.oai_settings, originalSettings);
         if (personaDescriptionWasBlanked) {
             for (const key of PERSONA_DESCRIPTION_FIELDS) {
@@ -763,6 +780,7 @@ export async function requestCompletion({
     profileName = '',
     presetName = '',
     prompt = '',
+    promptKey = '',
     messages = null,
     requestOverrides = {},
     optionsOverrides = {},
@@ -841,7 +859,7 @@ export async function requestCompletion({
                 context,
                 requestData.messages,
                 resolvedPresetName,
-                { prompt, includeChatHistory, includeIdentityContext }
+                { prompt, includeChatHistory, includeIdentityContext, promptKey }
             );
         }
     }

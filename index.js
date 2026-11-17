@@ -1615,7 +1615,21 @@ function setupQRMutationObserver() {
 async function setup() {
     // Load extension settings
     loadSettings();
-    
+
+    // Prompt manager: the prompt manager's own edits win over prompts.json, and
+    // extension prompts the user placed are spliced into SillyTavern's prompt
+    // collection on the next generation.
+    try {
+        const [{ installPromptOverrideResolver }, { installPromptSendBridge }] = await Promise.all([
+            import('./scripts/promptManager/store.js'),
+            import('./scripts/promptManager/sendBridge.js'),
+        ]);
+        installPromptOverrideResolver();
+        installPromptSendBridge();
+    } catch (error) {
+        console.warn(`[${extensionName}] Prompt send bridge not installed:`, error);
+    }
+
     // Initial UI update - executes after settings are verified loaded
     updateExtensionButtons(); // Initial button creation/update
     // Start the QR Bar integration

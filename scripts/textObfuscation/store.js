@@ -1,10 +1,22 @@
 import { getContext } from '../../../../../extensions.js';
-import { GG_EXTENSION_NAME, SETTINGS_KEY, SETTINGS_SCHEMA_VERSION, ZERO_WIDTH_SPACE } from './constants.js';
+import {
+    ALL_MARKERS,
+    GG_EXTENSION_NAME,
+    MARKER_SETS,
+    SETTINGS_KEY,
+    SETTINGS_SCHEMA_VERSION,
+} from './constants.js';
+
+const MARKER_CHARS = new Set(ALL_MARKERS);
 
 const DEFAULTS = Object.freeze({
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     enabled: false,
     rules: [],
+    markerSet: 'balanced',
+    useHomoglyphs: false,
+    stripIncoming: true,
+    protectSpans: true,
 });
 
 function clone(value) {
@@ -22,6 +34,13 @@ function toBoolean(value, fallback = false) {
     return value == null ? fallback : Boolean(value);
 }
 
+function containsMarker(value) {
+    for (const ch of String(value ?? '')) {
+        if (MARKER_CHARS.has(ch)) return true;
+    }
+    return false;
+}
+
 function patternKey(pattern) {
     return String(pattern).toLowerCase();
 }
@@ -29,7 +48,7 @@ function patternKey(pattern) {
 function sanitizeRule(rule, index) {
     if (!rule || typeof rule !== 'object') return null;
     const pattern = String(rule.pattern ?? rule.text ?? '').trim();
-    if (!pattern || pattern.includes(ZERO_WIDTH_SPACE)) return null;
+    if (!pattern || containsMarker(pattern)) return null;
     return {
         id: String(rule.id ?? `rule-${index + 1}`),
         pattern,
@@ -46,7 +65,7 @@ function legacyRules(source) {
     for (const rawLine of legacyText.split('\n')) {
         const pattern = rawLine.trim();
         const key = patternKey(pattern);
-        if (!pattern || pattern.includes(ZERO_WIDTH_SPACE) || seen.has(key)) continue;
+        if (!pattern || containsMarker(pattern) || seen.has(key)) continue;
         seen.add(key);
         rules.push({
             id: `legacy-${rules.length + 1}`,
@@ -76,10 +95,18 @@ function normalize(settings) {
         rules.push(rule);
     }
 
+    const markerSet = Object.prototype.hasOwnProperty.call(MARKER_SETS, source.markerSet)
+        ? source.markerSet
+        : DEFAULTS.markerSet;
+
     return {
         schemaVersion: SETTINGS_SCHEMA_VERSION,
         enabled: toBoolean(source.enabled, DEFAULTS.enabled),
         rules,
+        markerSet,
+        useHomoglyphs: toBoolean(source.useHomoglyphs, DEFAULTS.useHomoglyphs),
+        stripIncoming: toBoolean(source.stripIncoming, DEFAULTS.stripIncoming),
+        protectSpans: toBoolean(source.protectSpans, DEFAULTS.protectSpans),
     };
 }
 

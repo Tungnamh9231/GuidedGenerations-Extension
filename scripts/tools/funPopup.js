@@ -4,6 +4,7 @@
 
 import { getContext, extension_settings, extensionName, debugLog, requestCompletion, shouldUseDirectCall, generateNewSwipe, getPromptValue, fillPromptTemplate, pickGroupMember } from '../persistentGuides/guideExports.js'; // Import from central hub
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
+import { registerInjectionPromptSlot } from '../promptManager/store.js';
 
 // Map to store fun prompts loaded from file
 let FUN_PROMPTS = {};
@@ -240,6 +241,7 @@ export class FunPopup {
                     profileName: profileValue,
                     presetName: presetValue,
                     prompt: promptWithInput,
+                    promptKey: 'funPrompts.inputSuffix',
                     debugLabel: 'funPopup',
                 });
 
@@ -307,6 +309,7 @@ export class FunPopup {
 `;
                 }
 
+                registerInjectionPromptSlot('script_inject_instruct', 'funPrompts.inputSuffix');
                 await context.executeSlashCommandsWithOptions(stscriptCommand, {
                     showOutput: false,
                     handleExecutionErrors: true
@@ -351,6 +354,7 @@ export class FunPopup {
                     profileName: profileValue,
                     presetName: presetValue,
                     prompt: promptWithInput,
+                    promptKey: 'funPrompts.inputSuffix',
                     debugLabel: 'funPopup:swipe',
                     includeChatHistory: true,
                 });
@@ -375,6 +379,7 @@ export class FunPopup {
         const filledPrompt = String(promptText || '').replace(/\n/g, '\\n');
         const injectCommand = `/inject id=instruct position=chat ephemeral=true scan=true depth=0 role=${injectionRole} ${filledPrompt} |`;
         try {
+            registerInjectionPromptSlot('script_inject_instruct', 'funPrompts.inputSuffix');
             await context.executeSlashCommandsWithOptions(injectCommand, {
                 showOutput: false,
                 handleExecutionErrors: true,

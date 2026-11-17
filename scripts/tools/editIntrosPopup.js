@@ -8,6 +8,8 @@
  */
 
 import {
+    extensionName,
+    extension_settings,
     getContext,
     debugLog,
     activateSendButtons,
@@ -16,7 +18,7 @@ import {
     fillPromptTemplate
 } from '../persistentGuides/guideExports.js';
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
-import { PromptTabManager } from './promptTabManager.js';
+import { openRequestPromptSlot, closeRequestPromptSlot } from '../promptManager/store.js';
 
 export class EditIntrosPopup {
     constructor() {
@@ -29,25 +31,6 @@ export class EditIntrosPopup {
         if (this.initialized) return;
 
         if (!document.getElementById('editIntrosPopup')) {
-            this.promptTabManager = new PromptTabManager('editIntros', [
-                { 
-                    key: 'editExisting', 
-                    label: 'Edit Existing', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User edit instruction' },
-                        { short: 'mtr', long: 'messageToRewrite', desc: 'Current greeting message' }
-                    ]
-                },
-                { 
-                    key: 'makeNew', 
-                    label: 'Create New', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User creation instruction' }
-                    ]
-                }
-            ]);
-            const promptTabHtml = this.promptTabManager.getHtml();
-
             const popupHtml = `
                 <div id="editIntrosPopup" class="gg-popup gg-editor-popup" role="dialog" aria-modal="true" aria-labelledby="gg-edit-intros-title" aria-hidden="true">
                     <div class="gg-popup-content gg-editor-dialog gg-intro-editor-dialog">
@@ -67,18 +50,7 @@ export class EditIntrosPopup {
                             </button>
                         </div>
                         <div class="gg-popup-body gg-editor-body">
-                            <div class="gg-tabs" role="tablist" aria-label="Intro editor sections">
-                                <button type="button" id="gg-intros-tab-normal" class="gg-tab-btn active" data-tab="normal" role="tab" aria-selected="true" aria-controls="gg-tab-normal">
-                                    <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
-                                    <span>Write</span>
-                                </button>
-                                <button type="button" id="gg-intros-tab-prompts" class="gg-tab-btn" data-tab="prompts" role="tab" aria-selected="false" aria-controls="gg-tab-prompts">
-                                    <i class="fa-solid fa-terminal" aria-hidden="true"></i>
-                                    <span>Prompt</span>
-                                </button>
-                            </div>
-
-                            <div id="gg-tab-normal" class="gg-tab-content active" role="tabpanel" aria-labelledby="gg-intros-tab-normal">
+                            <div id="gg-tab-normal" class="gg-tab-content active">
                                 <section class="gg-popup-section gg-editor-card gg-editor-preview-card">
                                 <div class="gg-editor-section-heading">
                                     <div>
@@ -111,10 +83,6 @@ export class EditIntrosPopup {
                                 </div>
                                 <p id="gg-intro-instruction-error" class="gg-editor-error" role="alert" hidden>Please enter an instruction.</p>
                             </section>
-                            </div>
-
-                            <div id="gg-tab-prompts" class="gg-tab-content" role="tabpanel" aria-labelledby="gg-intros-tab-prompts" hidden>
-                                ${promptTabHtml}
                             </div>
                         </div>
                         <div class="gg-popup-footer-wrap gg-editor-footer-wrap">
@@ -149,9 +117,6 @@ export class EditIntrosPopup {
             this._updateInstructionCount();
         }
         this.setupEventListeners();
-        if (this.promptTabManager) {
-            this.promptTabManager.setupEventListeners(this.popupElement);
-        }
         this.initialized = true;
     }
 
@@ -193,37 +158,6 @@ export class EditIntrosPopup {
 
         this.popupElement.addEventListener('click', (event) => {
             if (event.target === this.popupElement) this.close();
-        });
-
-        // Tabs
-        const tabBtns = this.popupElement.querySelectorAll('.gg-tab-btn');
-        const tabContents = this.popupElement.querySelectorAll('.gg-tab-content');
-        const footerWrap = this.popupElement.querySelector('.gg-popup-footer-wrap');
-        tabBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const selectedButton = e.currentTarget;
-                const targetTab = selectedButton.getAttribute('data-tab');
-
-                // Update buttons
-                tabBtns.forEach(b => {
-                    b.classList.remove('active');
-                    b.setAttribute('aria-selected', 'false');
-                });
-                selectedButton.classList.add('active');
-                selectedButton.setAttribute('aria-selected', 'true');
-
-                // Update contents
-                tabContents.forEach(content => {
-                    const isActive = content.id === `gg-tab-${targetTab}`;
-                    content.hidden = !isActive;
-                    content.classList.toggle('active', isActive);
-                });
-
-                // Toggle footer
-                if (footerWrap) {
-                    footerWrap.hidden = targetTab === 'prompts';
-                }
-            });
         });
 
         document.addEventListener('keydown', (event) => {
@@ -337,10 +271,10 @@ export class EditIntrosPopup {
                 return;
             }
 
-            const template = await this.promptTabManager.getPrompt('editExisting');
+            const template = await getPromptValue('editIntros.editExisting', '', { settings: extension_settings[extensionName] });
             const promptText = fillPromptTemplate(template, { instruction, messageToRewrite });
 
-            await this.executeGeneration(context, promptText);
+            await this.executeGeneration(context, promptText, 'editIntros.editExisting');
         } catch (error) {
             console.error('[GuidedGenerations] Error executing Edit Intro request:', error);
         }
@@ -366,28 +300,37 @@ export class EditIntrosPopup {
                 return;
             }
 
-            const template = await this.promptTabManager.getPrompt('makeNew');
+            const template = await getPromptValue('editIntros.makeNew', '', { settings: extension_settings[extensionName] });
             const promptText = fillPromptTemplate(template, { instruction });
-            await this.executeGeneration(context, promptText);
+            await this.executeGeneration(context, promptText, 'editIntros.makeNew');
         } catch (error) {
             console.error('[GuidedGenerations] Error executing Make New Intro request:', error);
         }
     }
 
-    async executeGeneration(context, promptText) {
+    async executeGeneration(context, promptText, promptKey) {
         const originalChat = [...(context.chat || [])];
-        
+        let requestSlot = '';
+
         // Isolate chat context
         if (context.chat) {
             context.chat.length = 0;
-            context.chat.push({
-                name: 'User',
-                is_user: true,
-                is_system: false,
-                send_date: Date.now(),
-                mes: promptText,
-                extra: { type: 'temp_intro_gen' }
-            });
+            // Chat completion: the task prompt is announced to the extension
+            // Prompt Manager, which decides where it is sent. Text completion
+            // has no prompt manager, so keep the old single-message approach.
+            if (context.mainApi === 'openai') {
+                requestSlot = openRequestPromptSlot(context, promptKey, promptText);
+            }
+            if (!requestSlot) {
+                context.chat.push({
+                    name: 'User',
+                    is_user: true,
+                    is_system: false,
+                    send_date: Date.now(),
+                    mes: promptText,
+                    extra: { type: 'temp_intro_gen' }
+                });
+            }
         }
 
         setSendButtonState?.(true);
@@ -412,6 +355,7 @@ export class EditIntrosPopup {
         } catch (genError) {
             console.error('[GuidedGenerations] Intro generation failed:', genError);
         } finally {
+            closeRequestPromptSlot(context, requestSlot);
             if (context.chat) {
                 context.chat.length = 0;
                 context.chat.push(...originalChat);

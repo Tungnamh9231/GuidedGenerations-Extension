@@ -25,7 +25,8 @@ const clothesGuide = async (isAuto = false) => {
         finalCommand,
         isAuto,
         previousInjectionAction: 'move',
-        raw: extension_settings[extensionName]?.rawPromptClothes ?? false
+        raw: extension_settings[extensionName]?.rawPromptClothes ?? false,
+        promptKey: 'promptClothes'
     });
 };
 

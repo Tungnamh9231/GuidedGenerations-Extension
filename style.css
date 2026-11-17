@@ -264,10 +264,6 @@
     padding-right: 10px;
 }
 
-.guide-prompt-overrides-section .setting_item {
-    margin-bottom: 15px;
-}
-
 .setting_item label {
     margin-left: 8px;
     cursor: pointer;
@@ -453,10 +449,6 @@
     min-width: 100px; /* Adjust as needed */
 }
 
-.gg-corrections-popup-content {
-    max-width: 800px;
-}
-
 .gg-corrections-message-wrap {
     position: relative;
 }
@@ -471,16 +463,24 @@
     box-sizing: border-box;
     width: 100%;
     margin: 0;
-    padding: 8px;
+    padding: 10px 12px;
     border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 5px;
+    border-radius: 10px;
     font: inherit;
     line-height: 1.4;
     white-space: pre-wrap;
     overflow-wrap: break-word;
     word-break: break-word;
     color: var(--SmartThemeBodyColor);
-    background: var(--SmartThemeBlurTintColor);
+    /* Must stay fully opaque: the overlay sits on top of the textarea, and any
+       transparency makes the textarea's text bleed through (visible as doubled
+       text) since the two layers never align perfectly (scrollbar gutter).
+       Note: in the background shorthand a color is only valid as the LAST
+       layer, so the tint is expressed as a solid gradient image. */
+    background:
+        linear-gradient(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.18)),
+        linear-gradient(var(--SmartThemeBlurTintColor), var(--SmartThemeBlurTintColor)),
+        #171717;
     pointer-events: none;
     z-index: 1;
     overflow: hidden;
@@ -497,9 +497,9 @@
     box-sizing: border-box;
     width: 100%;
     margin: 0;
-    padding: 8px;
+    padding: 10px 12px;
     border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 5px;
+    border-radius: 10px;
     font: inherit;
     line-height: 1.4;
     white-space: pre-wrap;
@@ -507,6 +507,13 @@
     word-break: break-word;
     resize: vertical;
     overflow: auto;
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.gg-corrections-message:focus {
+    border-color: var(--gg-editor-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--gg-editor-accent) 16%, transparent);
+    outline: none;
 }
 
 /* Recolor the native selection inside the corrections textarea so the
@@ -526,22 +533,74 @@
     color: var(--SmartThemeBodyColor);
 }
 
-.gg-corrections-nav {
-    display: flex;
-    flex-direction: column;
+/* Message / swipe navigator */
+.gg-corr-nav-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 10px;
 }
 
-.gg-corrections-nav-row {
+.gg-corr-nav-group {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.12);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 10px;
 }
 
-.gg-corrections-info {
-    flex: 1;
+.gg-corr-step {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: var(--SmartThemeBodyColor);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 150ms ease, background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.gg-corr-step:hover:not(:disabled) {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: color-mix(in srgb, var(--gg-editor-accent) 45%, var(--SmartThemeBorderColor));
+    color: var(--gg-editor-accent);
+}
+
+.gg-corr-step:disabled {
+    cursor: not-allowed;
+    opacity: 0.28;
+}
+
+.gg-corr-info {
+    flex: 1 1 auto;
+    min-width: 0;
     text-align: center;
-    font-weight: 500;
+    font-size: 0.78em;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gg-corr-preset {
+    margin-top: 10px;
+}
+
+@media (max-width: 640px) {
+    .gg-corr-nav-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .gg-button {
@@ -981,8 +1040,7 @@
    Intro & Description Editors
    ============================ */
 
-#editIntrosPopup.gg-editor-popup,
-#editDescriptionPopup.gg-editor-popup {
+.gg-editor-popup {
     --gg-editor-overlay-gap: clamp(14px, 4vw, 48px);
     position: fixed;
     top: 0;
@@ -1008,8 +1066,7 @@
     -webkit-backdrop-filter: blur(6px);
 }
 
-#editIntrosPopup .gg-editor-dialog,
-#editDescriptionPopup .gg-editor-dialog {
+.gg-editor-popup .gg-editor-dialog {
     --gg-editor-accent: var(--SmartThemeQuoteColor, var(--SmartThemeAccentColor, #9b87f5));
     position: relative;
     top: auto;
@@ -1035,13 +1092,37 @@
     animation: gg-editor-enter 160ms ease-out;
 }
 
-#editDescriptionPopup .gg-description-editor-dialog {
+/* Accent beam along the top edge — subtle eye-catcher shared by all editors. */
+.gg-editor-popup .gg-editor-dialog::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    z-index: 2;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        color-mix(in srgb, var(--gg-editor-accent) 70%, transparent) 35%,
+        color-mix(in srgb, var(--gg-editor-accent) 70%, transparent) 65%,
+        transparent
+    );
+    opacity: 0.85;
+    pointer-events: none;
+}
+
+.gg-editor-popup .gg-description-editor-dialog {
     width: min(100%, 780px);
     max-width: 780px;
 }
 
-#editIntrosPopup .gg-popup-header,
-#editDescriptionPopup .gg-popup-header {
+.gg-editor-popup .gg-corrections-dialog {
+    width: min(100%, 760px);
+    max-width: 760px;
+}
+
+.gg-editor-popup .gg-popup-header {
     flex: 0 0 auto;
     align-items: flex-start;
     gap: 18px;
@@ -1070,6 +1151,7 @@
     border: 1px solid color-mix(in srgb, var(--gg-editor-accent) 34%, transparent);
     border-radius: 12px;
     font-size: 18px;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--gg-editor-accent) 18%, transparent);
 }
 
 .gg-editor-eyebrow {
@@ -1083,8 +1165,7 @@
     text-transform: uppercase;
 }
 
-#editIntrosPopup .gg-popup-header h2,
-#editDescriptionPopup .gg-popup-header h2 {
+.gg-editor-popup .gg-popup-header h2 {
     margin: 0;
     font-size: 1.3em;
     line-height: 1.25;
@@ -1097,8 +1178,7 @@
     line-height: 1.35;
 }
 
-#editIntrosPopup .gg-popup-close,
-#editDescriptionPopup .gg-popup-close {
+.gg-editor-popup .gg-popup-close {
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
@@ -1116,16 +1196,14 @@
     transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
 }
 
-#editIntrosPopup .gg-popup-close:hover,
-#editDescriptionPopup .gg-popup-close:hover {
+.gg-editor-popup .gg-popup-close:hover {
     color: var(--SmartThemeBodyColor);
     background: rgba(255, 255, 255, 0.07);
     border-color: var(--SmartThemeBorderColor);
     opacity: 1;
 }
 
-#editIntrosPopup .gg-editor-body,
-#editDescriptionPopup .gg-editor-body {
+.gg-editor-popup .gg-editor-body {
     flex: 1 1 auto;
     min-height: 0;
     margin: 0;
@@ -1134,13 +1212,11 @@
     scrollbar-width: thin;
 }
 
-#editIntrosPopup .gg-popup-section,
-#editDescriptionPopup .gg-popup-section {
+.gg-editor-popup .gg-popup-section {
     margin: 0 0 14px;
 }
 
-#editIntrosPopup .gg-editor-card,
-#editDescriptionPopup .gg-editor-card {
+.gg-editor-popup .gg-editor-card {
     padding: 15px;
     background: rgba(0, 0, 0, 0.12);
     border: 1px solid var(--SmartThemeBorderColor);
@@ -1155,8 +1231,7 @@
     margin-bottom: 10px;
 }
 
-#editIntrosPopup .gg-editor-section-heading h3,
-#editDescriptionPopup .gg-editor-section-heading h3,
+.gg-editor-popup .gg-editor-section-heading h3,
 .gg-editor-section-label {
     display: block;
     margin: 0;
@@ -1195,7 +1270,7 @@
 }
 
 .gg-editor-current-text,
-#editDescriptionPopup .gg-current-desc-container {
+.gg-editor-popup .gg-current-desc-container {
     box-sizing: border-box;
     max-height: 180px;
     padding: 11px 12px;
@@ -1203,6 +1278,7 @@
     color: var(--SmartThemeBodyColor);
     background: rgba(0, 0, 0, 0.18);
     border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 75%, transparent);
+    border-left: 3px solid color-mix(in srgb, var(--gg-editor-accent) 55%, transparent);
     border-radius: 9px;
     font-family: inherit;
     font-size: 0.84em;
@@ -1216,8 +1292,7 @@
     max-height: 145px;
 }
 
-#editIntrosPopup .gg-editor-textarea,
-#editDescriptionPopup .gg-editor-textarea {
+.gg-editor-popup .gg-editor-textarea {
     display: block;
     box-sizing: border-box;
     width: 100%;
@@ -1236,19 +1311,16 @@
     transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
 }
 
-#editIntrosPopup .gg-editor-textarea:hover,
-#editDescriptionPopup .gg-editor-textarea:hover {
+.gg-editor-popup .gg-editor-textarea:hover {
     background: rgba(0, 0, 0, 0.25);
 }
 
-#editIntrosPopup .gg-editor-textarea:focus,
-#editDescriptionPopup .gg-editor-textarea:focus {
+.gg-editor-popup .gg-editor-textarea:focus {
     border-color: var(--gg-editor-accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--gg-editor-accent) 16%, transparent);
 }
 
-#editIntrosPopup .gg-editor-textarea.gg-editor-input-error,
-#editDescriptionPopup .gg-editor-textarea.gg-editor-input-error {
+.gg-editor-popup .gg-editor-textarea.gg-editor-input-error {
     border-color: #ef6461;
     box-shadow: 0 0 0 3px rgba(239, 100, 97, 0.13);
 }
@@ -1315,8 +1387,7 @@
 }
 
 /* Description & Intro tabs */
-#editDescriptionPopup .gg-tabs,
-#editIntrosPopup .gg-tabs {
+.gg-editor-popup .gg-tabs {
     display: flex;
     gap: 4px;
     margin-bottom: 14px;
@@ -1326,8 +1397,7 @@
     border-radius: 10px;
 }
 
-#editDescriptionPopup .gg-tab-btn,
-#editIntrosPopup .gg-tab-btn {
+.gg-editor-popup .gg-tab-btn {
     display: inline-flex;
     flex: 1 1 0;
     align-items: center;
@@ -1346,30 +1416,25 @@
     transition: opacity 150ms ease, background-color 150ms ease, border-color 150ms ease;
 }
 
-#editDescriptionPopup .gg-tab-btn:hover,
-#editIntrosPopup .gg-tab-btn:hover {
+.gg-editor-popup .gg-tab-btn:hover {
     background: rgba(255, 255, 255, 0.04);
     opacity: 0.9;
 }
 
-#editDescriptionPopup .gg-tab-btn.active,
-#editIntrosPopup .gg-tab-btn.active {
+.gg-editor-popup .gg-tab-btn.active {
     color: var(--SmartThemeBodyColor);
-    background: rgba(255, 255, 255, 0.075);
-    border-color: var(--SmartThemeBorderColor);
+    background: color-mix(in srgb, var(--gg-editor-accent) 10%, rgba(255, 255, 255, 0.075));
+    border-color: color-mix(in srgb, var(--gg-editor-accent) 45%, var(--SmartThemeBorderColor));
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
     opacity: 1;
 }
 
-#editDescriptionPopup .gg-tab-btn.active i,
-#editIntrosPopup .gg-tab-btn.active i {
+.gg-editor-popup .gg-tab-btn.active i {
     color: var(--gg-editor-accent);
 }
 
-#editDescriptionPopup .gg-tab-content[hidden],
-#editIntrosPopup .gg-tab-content[hidden],
-#editDescriptionPopup .gg-popup-footer-wrap[hidden],
-#editIntrosPopup .gg-popup-footer-wrap[hidden] {
+.gg-editor-popup .gg-tab-content[hidden],
+.gg-editor-popup .gg-popup-footer-wrap[hidden] {
     display: none;
 }
 
@@ -1457,36 +1522,36 @@
     opacity: 1;
 }
 
-#editDescriptionPopup .gg-add-format-btn {
+.gg-editor-popup .gg-add-format-btn {
     width: 100%;
     margin-top: 10px;
     border-style: dashed;
 }
 
 /* Help panel and diff refinements */
-#editDescriptionPopup .gg-guidebook {
+.gg-editor-popup .gg-guidebook {
     margin: 0;
     border-radius: 10px;
 }
 
-#editDescriptionPopup .gg-guidebook summary {
+.gg-editor-popup .gg-guidebook summary {
     padding: 9px 11px;
     background: rgba(0, 0, 0, 0.1);
     font-size: 0.8em;
 }
 
-#editDescriptionPopup .gg-guidebook-content {
+.gg-editor-popup .gg-guidebook-content {
     background: rgba(0, 0, 0, 0.1);
 }
 
-#editDescriptionPopup .gg-current-desc-container.gg-diff-view {
+.gg-editor-popup .gg-current-desc-container.gg-diff-view {
     max-height: 360px;
     padding: 0;
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     font-size: 0.82em;
 }
 
-#editDescriptionPopup .gg-diff-header {
+.gg-editor-popup .gg-diff-header {
     position: sticky;
     top: 0;
     z-index: 1;
@@ -1495,8 +1560,7 @@
 }
 
 /* Footer and editor actions */
-#editIntrosPopup .gg-editor-footer-wrap,
-#editDescriptionPopup .gg-editor-footer-wrap {
+.gg-editor-popup .gg-editor-footer-wrap {
     flex: 0 0 auto;
     gap: 8px;
     margin: 0;
@@ -1518,8 +1582,7 @@
     color: var(--gg-editor-accent);
 }
 
-#editIntrosPopup .gg-popup-footer,
-#editDescriptionPopup .gg-popup-footer,
+.gg-editor-popup .gg-popup-footer,
 #ggGroupPickerPopup .gg-popup-footer {
     align-items: center;
     gap: 8px;
@@ -1528,8 +1591,7 @@
     border: 0;
 }
 
-#editIntrosPopup .gg-popup-footer .gg-button,
-#editDescriptionPopup .gg-popup-footer .gg-button,
+.gg-editor-popup .gg-popup-footer .gg-button,
 #ggGroupPickerPopup .gg-popup-footer .gg-button {
     display: inline-flex;
     align-items: center;
@@ -1547,15 +1609,13 @@
     transition: transform 120ms ease, opacity 150ms ease, background-color 150ms ease, border-color 150ms ease;
 }
 
-#editIntrosPopup .gg-popup-footer .gg-button:hover,
-#editDescriptionPopup .gg-popup-footer .gg-button:hover,
+.gg-editor-popup .gg-popup-footer .gg-button:hover,
 #ggGroupPickerPopup .gg-popup-footer .gg-button:hover {
     opacity: 1;
     transform: translateY(-1px);
 }
 
-#editIntrosPopup .gg-popup-footer .gg-button:disabled,
-#editDescriptionPopup .gg-popup-footer .gg-button:disabled,
+.gg-editor-popup .gg-popup-footer .gg-button:disabled,
 #ggGroupPickerPopup .gg-popup-footer .gg-button:disabled {
     cursor: not-allowed;
     filter: saturate(0.4);
@@ -1563,22 +1623,23 @@
     transform: none;
 }
 
-#editIntrosPopup .gg-popup-footer .gg-button-primary,
-#editDescriptionPopup .gg-popup-footer .gg-button-primary,
+.gg-editor-popup .gg-popup-footer .gg-button-primary,
 #ggGroupPickerPopup .gg-popup-footer .gg-button-primary {
-    background: color-mix(in srgb, var(--gg-editor-accent) 28%, var(--SmartThemeUserMesBlurTintColor));
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--gg-editor-accent) 34%, var(--SmartThemeUserMesBlurTintColor)),
+        color-mix(in srgb, var(--gg-editor-accent) 16%, var(--SmartThemeUserMesBlurTintColor))
+    );
     border-color: color-mix(in srgb, var(--gg-editor-accent) 56%, var(--SmartThemeBorderColor));
-    box-shadow: 0 5px 14px color-mix(in srgb, var(--gg-editor-accent) 14%, transparent);
+    box-shadow: 0 5px 14px color-mix(in srgb, var(--gg-editor-accent) 16%, transparent);
 }
 
-#editIntrosPopup .gg-popup-footer .gg-button-secondary,
-#editDescriptionPopup .gg-popup-footer .gg-button-secondary,
+.gg-editor-popup .gg-popup-footer .gg-button-secondary,
 #ggGroupPickerPopup .gg-popup-footer .gg-button-secondary {
     background: rgba(255, 255, 255, 0.04);
 }
 
-#editIntrosPopup .gg-popup-footer .gg-button-quiet,
-#editDescriptionPopup .gg-popup-footer .gg-button-quiet,
+.gg-editor-popup .gg-popup-footer .gg-button-quiet,
 #ggGroupPickerPopup .gg-popup-footer .gg-button-quiet {
     margin-right: auto;
     background: transparent;
@@ -1586,10 +1647,8 @@
     opacity: 0.58;
 }
 
-#editIntrosPopup button:focus-visible,
-#editDescriptionPopup button:focus-visible,
-#editIntrosPopup textarea:focus-visible,
-#editDescriptionPopup textarea:focus-visible {
+.gg-editor-popup button:focus-visible,
+.gg-editor-popup textarea:focus-visible {
     outline: 2px solid var(--gg-editor-accent);
     outline-offset: 2px;
 }
@@ -1606,15 +1665,13 @@
 }
 
 @media (max-width: 640px) {
-    #editIntrosPopup.gg-editor-popup,
-    #editDescriptionPopup.gg-editor-popup {
+    .gg-editor-popup {
         --gg-editor-overlay-gap: 10px;
         align-items: center;
         justify-content: center;
     }
 
-    #editIntrosPopup .gg-editor-dialog,
-    #editDescriptionPopup .gg-editor-dialog {
+    .gg-editor-popup .gg-editor-dialog {
         width: 100%;
         max-width: none;
         max-height: 100%;
@@ -1622,18 +1679,15 @@
         border-radius: 14px;
     }
 
-    #editIntrosPopup .gg-popup-header,
-    #editDescriptionPopup .gg-popup-header {
+    .gg-editor-popup .gg-popup-header {
         padding: 16px;
     }
 
-    #editIntrosPopup .gg-editor-body,
-    #editDescriptionPopup .gg-editor-body {
+    .gg-editor-popup .gg-editor-body {
         padding: 14px 14px 8px;
     }
 
-    #editIntrosPopup .gg-editor-footer-wrap,
-    #editDescriptionPopup .gg-editor-footer-wrap {
+    .gg-editor-popup .gg-editor-footer-wrap {
         padding: 11px 14px max(14px, env(safe-area-inset-bottom));
     }
 
@@ -1651,14 +1705,12 @@
         flex-direction: column;
     }
 
-    #editIntrosPopup .gg-popup-footer .gg-button,
-    #editDescriptionPopup .gg-popup-footer .gg-button,
+    .gg-editor-popup .gg-popup-footer .gg-button,
     #ggGroupPickerPopup .gg-popup-footer .gg-button {
         flex: 1 1 auto;
     }
 
-    #editIntrosPopup .gg-popup-footer .gg-button-quiet,
-    #editDescriptionPopup .gg-popup-footer .gg-button-quiet,
+    .gg-editor-popup .gg-popup-footer .gg-button-quiet,
     #ggGroupPickerPopup .gg-popup-footer .gg-button-quiet {
         flex: 0 0 auto;
     }
@@ -1673,29 +1725,25 @@
         gap: 8px;
     }
 
-    #editIntrosPopup .gg-popup-footer,
-    #editDescriptionPopup .gg-popup-footer,
+    .gg-editor-popup .gg-popup-footer,
     #ggGroupPickerPopup .gg-popup-footer {
         display: grid;
         grid-template-columns: 1fr 1fr;
     }
 
-    #editIntrosPopup .gg-popup-footer .gg-button-quiet,
-    #editDescriptionPopup .gg-popup-footer .gg-button-quiet,
+    .gg-editor-popup .gg-popup-footer .gg-button-quiet,
     #ggGroupPickerPopup .gg-popup-footer .gg-button-quiet {
         margin: 0;
     }
 
-    #editIntrosPopup .gg-popup-footer .gg-button-primary:last-child,
-    #editDescriptionPopup .gg-popup-footer .gg-button-primary:last-child,
+    .gg-editor-popup .gg-popup-footer .gg-button-primary:last-child,
     #ggGroupPickerPopup .gg-popup-footer .gg-button-primary:last-child {
         grid-column: 1 / -1;
     }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    #editIntrosPopup .gg-editor-dialog,
-    #editDescriptionPopup .gg-editor-dialog,
+    .gg-editor-popup .gg-editor-dialog,
     #ggGroupPickerPopup .gg-picker-dialog {
         animation: none;
     }
@@ -2006,7 +2054,6 @@
     user-select: none;
 }
 
-<<<<<<< HEAD
 /* ── Prompt Tab System ── */
 .gg-prompt-section {
     display: flex;
@@ -2612,50 +2659,1346 @@ body.square-avatars .gg-picker-avatar-fallback {
     }
 }
 
-/* Corrections Tab Styling Fix */
-#correctionsPopup .gg-tabs {
+/* ============================================================================
+   Guided Generations — settings panel
+   Scoped to the extension's own drawer so nothing leaks into SillyTavern.
+   ============================================================================ */
+
+.GuidedGenerations-Extension-settingslist {
+    --gg-radius: 14px;
+    --gg-radius-sm: 9px;
+    --gg-surface: rgba(127, 127, 127, 0.055);
+    --gg-surface-2: rgba(127, 127, 127, 0.035);
+    --gg-accent: var(--SmartThemeQuoteColor, var(--SmartThemeAccentColor, #9b87f5));
+    --gg-border: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.14));
+}
+
+.GuidedGenerations-Extension-settingslist .gg-settings-root {
     display: flex;
-    gap: 4px;
-    margin-bottom: 14px;
-    padding: 4px;
-    background: rgba(0, 0, 0, 0.15);
-    border-radius: 8px;
-    border: 1px solid var(--SmartThemeBorderColor);
+    flex-direction: column;
+    gap: 14px;
+    padding: 2px 2px 6px;
 }
-#correctionsPopup .gg-tab-btn {
-    display: inline-flex;
-    flex: 1 1 0;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border: none;
-    background: transparent;
-    color: var(--SmartThemeBodyColor);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.95em;
-    font-weight: 500;
-    opacity: 0.7;
-    transition: all 0.2s ease;
+
+/* Dynamic sections (Native UB, Unicode Sensitive Words) are appended after the
+   root by their own modules; give them the same card treatment. */
+.GuidedGenerations-Extension-settingslist .inline-drawer-content > .settings_section {
+    margin-top: 14px;
+    padding: 14px 16px 16px;
+    border: 1px solid var(--gg-border);
+    border-radius: var(--gg-radius);
+    background: var(--gg-surface);
 }
-#correctionsPopup .gg-tab-btn:hover {
-    background: rgba(255, 255, 255, 0.04);
-    opacity: 0.9;
-}
-#correctionsPopup .gg-tab-btn.active {
-    color: var(--SmartThemeBodyColor);
-    background: rgba(255, 255, 255, 0.075);
-    opacity: 1;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-#correctionsPopup .gg-tab-btn.active i {
-    color: var(--SmartThemeQuoteColor, var(--SmartThemeAccentColor, #9b87f5));
-}
-#correctionsPopup .gg-tab-content[hidden] {
+
+.GuidedGenerations-Extension-settingslist .inline-drawer-content > .settings_section > hr {
     display: none;
 }
-#correctionsPopup textarea:focus-visible {
-    outline: 2px solid var(--SmartThemeQuoteColor, var(--SmartThemeAccentColor, #9b87f5));
+
+.GuidedGenerations-Extension-settingslist .inline-drawer-content > .settings_section > h4 {
+    margin: 0 0 10px;
+    font-size: 0.95em;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------- hero ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 16px 18px;
+    border: 1px solid var(--gg-border);
+    border-radius: var(--gg-radius);
+    background:
+        linear-gradient(135deg, color-mix(in srgb, var(--gg-accent) 16%, transparent), transparent 62%),
+        var(--gg-surface);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-main {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    font-size: 17px;
+    color: var(--SmartThemeBodyColor, #fff);
+    background: color-mix(in srgb, var(--gg-accent) 30%, transparent);
+    border: 1px solid color-mix(in srgb, var(--gg-accent) 55%, transparent);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-copy {
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 1.06em;
+    font-weight: 750;
+    line-height: 1.3;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-title .gg-version-badge {
+    margin: 0;
+    padding: 2px 8px;
+    font-size: 0.66em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    border-radius: 999px;
+    color: var(--SmartThemeBodyColor, #fff);
+    background: color-mix(in srgb, var(--gg-accent) 22%, transparent);
+    border: 1px solid color-mix(in srgb, var(--gg-accent) 48%, transparent);
+    opacity: 1;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-sub {
+    margin-top: 3px;
+    font-size: 0.78em;
+    line-height: 1.45;
+    opacity: 0.66;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1 1 210px;
+    max-width: 320px;
+    min-width: 180px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-hero-search > i {
+    position: absolute;
+    left: 11px;
+    font-size: 0.75em;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-search-input {
+    width: 100%;
+    padding: 8px 12px 8px 30px;
+    border-radius: 999px;
+    font-size: 0.8em;
+}
+
+/* ---------------------------------------------------------------- grid ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-span-all {
+    grid-column: 1 / -1;
+}
+
+/* --------------------------------------------------------------- cards ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-card,
+.GuidedGenerations-Extension-settingslist .gg-details,
+.GuidedGenerations-Extension-settingslist .gg-panel {
+    border: 1px solid var(--gg-border);
+    border-radius: var(--gg-radius);
+    background: var(--gg-surface-2);
+    overflow: hidden;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-card {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 16px 16px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    margin-bottom: 12px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-card-icon,
+.GuidedGenerations-Extension-settingslist .gg-details-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    font-size: 0.8em;
+    background: rgba(127, 127, 127, 0.14);
+    border: 1px solid var(--gg-border);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-card-titles {
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-card-title,
+.GuidedGenerations-Extension-settingslist .gg-panel-title {
+    margin: 0;
+    font-size: 0.92em;
+    font-weight: 750;
+    letter-spacing: 0.01em;
+    line-height: 1.35;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-card-sub,
+.GuidedGenerations-Extension-settingslist .gg-panel-sub {
+    margin: 2px 0 0;
+    font-size: 0.74em;
+    line-height: 1.45;
+    opacity: 0.6;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-section-note {
+    margin: 0;
+    grid-column: 1 / -1;
+    padding: 9px 11px;
+    border-left: 2px solid color-mix(in srgb, var(--gg-accent) 65%, transparent);
+    border-radius: 0 var(--gg-radius-sm) var(--gg-radius-sm) 0;
+    background: rgba(127, 127, 127, 0.07);
+    font-size: 0.75em;
+    line-height: 1.55;
+    opacity: 0.82;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-section-note code {
+    font-size: 0.92em;
+}
+
+/* ------------------------------------------------------------- toggles ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-list.gg-cols-3 {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 7px;
+    align-items: start;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+    padding: 8px 11px;
+    border: 1px solid transparent;
+    border-radius: var(--gg-radius-sm);
+    background: rgba(127, 127, 127, 0.055);
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle:hover {
+    background: rgba(127, 127, 127, 0.11);
+    border-color: var(--gg-border);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-label {
+    font-size: 0.8em;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-hint {
+    font-size: 0.7em;
+    line-height: 1.45;
+    opacity: 0.58;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-wide {
+    align-items: flex-start;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toggle-wide .gg-switch {
+    margin-top: 2px;
+}
+
+/* switch -------------------------------------------------------------- */
+
+.GuidedGenerations-Extension-settingslist input.gg-switch {
+    -webkit-appearance: none;
+    appearance: none;
+    position: relative;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 20px;
+    margin: 0;
+    border: 1px solid var(--gg-border);
+    border-radius: 999px;
+    background: rgba(127, 127, 127, 0.3);
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.GuidedGenerations-Extension-settingslist input.gg-switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--SmartThemeBodyColor, #fff);
+    opacity: 0.85;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.GuidedGenerations-Extension-settingslist input.gg-switch:checked {
+    background: color-mix(in srgb, var(--gg-accent) 72%, transparent);
+    border-color: color-mix(in srgb, var(--gg-accent) 60%, transparent);
+}
+
+.GuidedGenerations-Extension-settingslist input.gg-switch:checked::after {
+    transform: translateX(16px);
+    opacity: 1;
+}
+
+.GuidedGenerations-Extension-settingslist input.gg-switch:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--gg-accent) 70%, transparent);
     outline-offset: 2px;
 }
+
+/* enable toggles inside the generated Native UB / Unicode sections */
+.GuidedGenerations-Extension-settingslist .gg-native-ub-enable,
+.GuidedGenerations-Extension-settingslist .gg-text-obfuscation-enable,
+.GuidedGenerations-Extension-settingslist .gg-ub-inline-toggle input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    position: relative;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 20px;
+    margin: 0;
+    border: 1px solid var(--gg-border);
+    border-radius: 999px;
+    background: rgba(127, 127, 127, 0.3);
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-native-ub-enable::after,
+.GuidedGenerations-Extension-settingslist .gg-text-obfuscation-enable::after,
+.GuidedGenerations-Extension-settingslist .gg-ub-inline-toggle input[type="checkbox"]::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--SmartThemeBodyColor, #fff);
+    opacity: 0.85;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-native-ub-enable:checked,
+.GuidedGenerations-Extension-settingslist .gg-text-obfuscation-enable:checked,
+.GuidedGenerations-Extension-settingslist .gg-ub-inline-toggle input[type="checkbox"]:checked {
+    background: color-mix(in srgb, var(--gg-accent) 72%, transparent);
+    border-color: color-mix(in srgb, var(--gg-accent) 60%, transparent);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-native-ub-enable:checked::after,
+.GuidedGenerations-Extension-settingslist .gg-text-obfuscation-enable:checked::after,
+.GuidedGenerations-Extension-settingslist .gg-ub-inline-toggle input[type="checkbox"]:checked::after {
+    transform: translateX(16px);
+    opacity: 1;
+}
+
+/* fields -------------------------------------------------------------- */
+
+.GuidedGenerations-Extension-settingslist .gg-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-field-label {
+    font-size: 0.76em;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    opacity: 0.85;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-field-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-field.gg-field-inline {
+    display: grid;
+    grid-template-columns: auto minmax(160px, 340px);
+    align-items: center;
+    justify-content: start;
+    column-gap: 14px;
+    row-gap: 7px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-field.gg-field-inline .setting_item_description {
+    grid-column: 1 / -1;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-select,
+.GuidedGenerations-Extension-settingslist .gg-num {
+    width: 100%;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-num {
+    max-width: 130px;
+    padding: 6px 9px;
+    font-size: 0.8em;
+}
+
+.GuidedGenerations-Extension-settingslist .setting_item_description {
+    display: block;
+    font-size: 0.72em;
+    line-height: 1.55;
+    opacity: 0.6;
+}
+
+.GuidedGenerations-Extension-settingslist .setting_item_description b {
+    opacity: 0.95;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-status-text {
+    font-size: 0.75em;
+    font-style: italic;
+    opacity: 0.62;
+}
+
+/* buttons ------------------------------------------------------------- */
+
+.GuidedGenerations-Extension-settingslist .gg-btn-row,
+.GuidedGenerations-Extension-settingslist .gg-toolbar-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-toolbar-row {
+    padding: 10px 12px;
+    border: 1px dashed var(--gg-border);
+    border-radius: var(--gg-radius-sm);
+    background: rgba(127, 127, 127, 0.05);
+}
+
+.GuidedGenerations-Extension-settingslist .menu_button.gg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 6px 12px;
+    border: 1px solid var(--gg-border);
+    border-radius: var(--gg-radius-sm);
+    font-size: 0.76em;
+    font-weight: 650;
+    background: rgba(127, 127, 127, 0.12);
+    transition: background 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .menu_button.gg-btn:hover {
+    background: rgba(127, 127, 127, 0.2);
+    border-color: color-mix(in srgb, var(--gg-accent) 55%, var(--gg-border));
+    transform: translateY(-1px);
+}
+
+.GuidedGenerations-Extension-settingslist .menu_button.gg-btn-quiet {
+    background: transparent;
+    opacity: 0.72;
+}
+
+/* ------------------------------------------------- collapsible details ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-details > summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 16px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: background 0.14s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details > summary::-webkit-details-marker {
+    display: none;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details > summary:hover {
+    background: rgba(127, 127, 127, 0.09);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details-title {
+    font-size: 0.9em;
+    font-weight: 750;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details-sub {
+    font-size: 0.72em;
+    line-height: 1.45;
+    opacity: 0.6;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details-chevron {
+    font-size: 0.7em;
+    opacity: 0.55;
+    transition: transform 0.18s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details[open] > summary {
+    border-bottom: 1px solid var(--gg-border);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details[open] .gg-details-chevron {
+    transform: rotate(180deg);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-details-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px 16px 16px;
+}
+
+/* --------------------------------------------------- preset assignment ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-panel {
+    padding: 13px 15px 15px;
+    background: rgba(0, 0, 0, 0.08);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-panel-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 12px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-head,
+.GuidedGenerations-Extension-settingslist .gg-assign-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) minmax(0, 1.5fr) minmax(0, 1.5fr);
+    gap: 10px;
+    align-items: center;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-head {
+    padding: 0 11px 7px;
+    border-bottom: 1px solid var(--gg-border);
+    font-size: 0.68em;
+    font-weight: 750;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    opacity: 0.55;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-row {
+    padding: 6px 11px;
+    border: 1px solid transparent;
+    border-radius: var(--gg-radius-sm);
+    background: rgba(127, 127, 127, 0.05);
+    transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-row:hover {
+    background: rgba(127, 127, 127, 0.1);
+    border-color: var(--gg-border);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-name {
+    font-size: 0.79em;
+    font-weight: 650;
+    line-height: 1.35;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-cap {
+    display: none;
+    font-size: 0.62em;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    opacity: 0.5;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-assign-field .gg-select {
+    font-size: 0.78em;
+}
+
+/* --------------------------------------------------- prompt overrides ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-group {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7em;
+    font-weight: 750;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: 0.55;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-item {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 10px 12px;
+    border: 1px solid var(--gg-border);
+    border-radius: var(--gg-radius-sm);
+    background: rgba(127, 127, 127, 0.05);
+    transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-item:focus-within {
+    border-color: color-mix(in srgb, var(--gg-accent) 55%, var(--gg-border));
+    background: rgba(127, 127, 127, 0.08);
+}
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-label {
+    font-size: 0.79em;
+    font-weight: 700;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-flags {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.7em;
+    opacity: 0.82;
+    cursor: pointer;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-flag .gg-num {
+    width: 58px;
+    max-width: none;
+    padding: 3px 6px;
+    font-size: 0.95em;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-prompt-area {
+    width: 100%;
+    min-height: 62px;
+    padding: 8px 10px;
+    font-size: 0.78em;
+    line-height: 1.55;
+    resize: vertical;
+}
+
+/* injected "Use prompts.json" toggle (scripts/settingsPanel.js) */
+.GuidedGenerations-Extension-settingslist .gg-use-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7em;
+    opacity: 0.78;
+    cursor: pointer;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-use-file input {
+    flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------- no results ---- */
+
+.GuidedGenerations-Extension-settingslist .gg-no-results {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 26px 16px;
+    border: 1px dashed var(--gg-border);
+    border-radius: var(--gg-radius);
+    font-size: 0.8em;
+    opacity: 0.62;
+}
+
+.GuidedGenerations-Extension-settingslist .gg-no-results[hidden] {
+    display: none;
+}
+
+/* ----------------------------------------------------------- responsive ---- */
+
+@media (max-width: 760px) {
+    .GuidedGenerations-Extension-settingslist .gg-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-hero {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-hero-search {
+        max-width: none;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-toggle-list.gg-cols-3 {
+        grid-template-columns: 1fr;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-field.gg-field-inline {
+        grid-template-columns: 1fr;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-assign-head {
+        display: none;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-assign-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+        padding: 9px 11px;
+    }
+
+    .GuidedGenerations-Extension-settingslist .gg-assign-cap {
+        display: block;
+    }
+}
+
+/* ================= Prompt Manager modal ================= */
+/* SillyTavern stacks its top bar at 3005 and open drawers at 4000, so 3000
+   put this popup behind the settings drawer it is opened from. 10001 matches
+   the extension's other modals (editIntrosPopup / ggGroupPickerPopup) and
+   stays below ST's own popup system (29999). */
+.gg-pm-popup {
+    position: fixed;
+    z-index: 10001;
+    height: 100vh;
+    height: 100dvh;
+}
+
+.gg-pm-content {
+    display: flex;
+    flex-direction: column;
+    width: min(920px, 92vw);
+    max-width: 920px;
+    max-height: 86vh;
+    max-height: 86dvh;
+    padding: 18px 20px;
+}
+
+.gg-pm-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+}
+
+.gg-pm-header h2 {
+    margin: 0;
+    font-size: 1.35em;
+}
+
+.gg-pm-totals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 6px;
+    font-size: 0.9em;
+    opacity: 0.85;
+}
+
+.gg-pm-totals b {
+    color: var(--SmartThemeQuoteColor);
+}
+
+.gg-pm-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.85em;
+    opacity: 0.8;
+    margin-bottom: 10px;
+}
+
+.gg-pm-legend-item i {
+    width: 18px;
+    text-align: center;
+    margin-right: 4px;
+}
+
+.gg-pm-legend-ext i {
+    color: var(--SmartThemeQuoteColor);
+}
+
+.gg-pm-list {
+    list-style: none;
+    margin: 0;
+    padding: 2px 2px 10px;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 120px;
+}
+
+.gg-pm-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    margin-bottom: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background-color: var(--SmartThemeBlurTintColor);
+    position: relative;
+}
+
+.gg-pm-item-native {
+    background-color: transparent;
+    opacity: 0.78;
+}
+
+.gg-pm-item-native:hover {
+    opacity: 1;
+}
+
+.gg-pm-item-ext {
+    border-left: 3px solid var(--SmartThemeQuoteColor);
+    background-color: var(--SmartThemeUserMesBlurTintColor);
+}
+
+.gg-pm-item.gg-pm-off {
+    opacity: 0.45;
+}
+
+.gg-pm-handle {
+    display: flex;
+    align-items: center;
+    color: var(--SmartThemeQuoteColor);
+    cursor: grab;
+    user-select: none;
+    padding: 0 2px;
+}
+
+.gg-pm-handle:active {
+    cursor: grabbing;
+}
+
+.gg-pm-handle-locked {
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.45;
+    cursor: default;
+}
+
+.gg-pm-name {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.gg-pm-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 46%;
+}
+
+.gg-pm-kind-icon {
+    width: 1.1em;
+    text-align: center;
+    opacity: 0.8;
+}
+
+.gg-pm-kind-icon-ext {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+.gg-pm-badge {
+    font-size: 0.72em;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
+.gg-pm-depth {
+    font-size: 0.75em;
+    opacity: 0.85;
+    font-family: monospace;
+    white-space: nowrap;
+}
+
+/* One chip per prompt, named after its edit-tab so several prompts of the
+   same block stay distinguishable (e.g. "Edit existing" vs "Make new"). */
+.gg-pm-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75em;
+    padding: 1px 7px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
+.gg-pm-hint-name {
+    font-weight: 600;
+}
+
+.gg-pm-role {
+    font-size: 0.75em;
+    opacity: 0.8;
+}
+
+.gg-pm-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+}
+
+.gg-pm-control {
+    cursor: pointer;
+    opacity: 0.75;
+    padding: 2px;
+}
+
+.gg-pm-control:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.gg-pm-hidden {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 4px 4px;
+    border-top: 1px dashed var(--SmartThemeBorderColor);
+    font-size: 0.85em;
+    opacity: 0.85;
+    flex: 0 0 auto;
+}
+
+.gg-pm-hidden-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    opacity: 0.8;
+}
+
+.gg-pm-hidden-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.gg-pm-hidden-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: transparent;
+    color: inherit;
+    font-size: 0.95em;
+    cursor: pointer;
+}
+
+.gg-pm-hidden-chip:hover {
+    color: var(--SmartThemeQuoteColor);
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.gg-pm-tokens {
+    flex: 0 0 54px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.8;
+}
+
+.gg-pm-placeholder {
+    border: 1px dashed var(--SmartThemeQuoteColor) !important;
+    background-color: transparent !important;
+    border-radius: 8px;
+    margin-bottom: 6px;
+}
+
+.ui-sortable-helper {
+    box-shadow: 0 6px 16px var(--SmartThemeShadowColor);
+    opacity: 0.95;
+}
+
+/* ---- Prompt manager edit popup ---- */
+/* Above .gg-pm-popup (10001) since it is opened from inside it. */
+.gg-pm-edit-popup {
+    position: fixed;
+    z-index: 10002;
+    height: 100vh;
+    height: 100dvh;
+}
+
+.gg-pm-edit-content {
+    display: flex;
+    flex-direction: column;
+    width: min(780px, 94vw);
+    max-width: 780px;
+    max-height: 88vh;
+    max-height: 88dvh;
+    padding: 18px 20px;
+}
+
+.gg-pm-edit-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.gg-pm-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+    background-color: transparent;
+    color: var(--SmartThemeBodyColor);
+    cursor: pointer;
+    font-size: 0.88em;
+}
+
+.gg-pm-tab:hover {
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.gg-pm-tab-active {
+    background-color: var(--SmartThemeQuoteColor);
+    border-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBlurTintColor);
+}
+
+.gg-pm-tab-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background-color: currentColor;
+}
+
+.gg-pm-edit-form {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    padding-right: 4px;
+}
+
+.gg-pm-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.gg-pm-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1 1 180px;
+    min-width: 150px;
+}
+
+.gg-pm-field-full {
+    margin-top: 6px;
+}
+
+.gg-pm-field label {
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+
+.gg-pm-field label.gg-pm-check {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.gg-pm-field label.gg-pm-check input {
+    margin: 0;
+}
+
+.gg-pm-field .text_muted {
+    font-size: 0.78em;
+    opacity: 0.7;
+}
+
+.gg-pm-field-hidden {
+    display: none;
+}
+
+.gg-pm-form-note {
+    font-size: 0.85em;
+    opacity: 0.85;
+    background-color: var(--SmartThemeBotMesBlurTintColor, transparent);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+}
+
+.gg-pm-edit-form textarea.gg-editor-textarea {
+    min-height: 220px;
+    resize: vertical;
+}
+
+@media (max-width: 700px) {
+    .gg-pm-label {
+        max-width: 100%;
+    }
+
+    .gg-pm-tokens {
+        flex-basis: 40px;
+    }
+}
+
+/* ---- Prompt manager popup footer buttons ---- */
+.gg-pm-popup .gg-popup-footer,
+.gg-pm-edit-popup .gg-popup-footer {
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+}
+
+.gg-pm-popup .gg-popup-footer .gg-button,
+.gg-pm-edit-popup .gg-popup-footer .gg-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 96px;
+    min-height: 36px;
+    padding: 8px 14px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background-color: var(--SmartThemeBotMesBlurTintColor, rgba(255, 255, 255, 0.06));
+    color: var(--SmartThemeBodyColor);
+    font: inherit;
+    font-size: 0.9em;
+    font-weight: 600;
+    line-height: 1.2;
+    transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+
+.gg-pm-popup .gg-popup-footer .gg-button:hover,
+.gg-pm-edit-popup .gg-popup-footer .gg-button:hover {
+    opacity: 1;
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.gg-pm-edit-popup .gg-popup-footer .gg-button-secondary {
+    background-color: transparent;
+}
+
+.gg-pm-edit-popup .gg-popup-footer .gg-button-quiet {
+    background-color: transparent;
+    border-color: transparent;
+    opacity: 0.65;
+}
+
+.gg-pm-edit-popup .gg-popup-footer .gg-button-quiet:hover {
+    opacity: 1;
+    border-color: var(--SmartThemeBorderColor);
+}
+
+.gg-pm-edit-popup .gg-popup-footer #gg-pm-edit-save {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 26%, transparent);
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, var(--SmartThemeBorderColor));
+}
+
+/* ---- Prompt manager: mobile layout ---- */
+@media (max-width: 640px) {
+    /* Full-bleed sheet, same idea as the editor popups on phones. */
+    .gg-pm-popup .gg-pm-content,
+    .gg-pm-edit-popup .gg-pm-edit-content {
+        width: 100%;
+        max-width: none;
+        max-height: 100%;
+        border-radius: 0;
+        padding: 14px 14px max(14px, env(safe-area-inset-bottom));
+    }
+
+    .gg-pm-header {
+        gap: 8px;
+        padding-bottom: 8px;
+        margin-bottom: 8px;
+    }
+
+    .gg-pm-header h2 {
+        font-size: 1.15em;
+    }
+
+    .gg-pm-totals {
+        gap: 4px 12px;
+        font-size: 0.8em;
+    }
+
+    /* Long help text — the vertical space matters more on a phone. */
+    .gg-pm-legend {
+        display: none;
+    }
+
+    .gg-pm-item {
+        padding: 8px;
+        gap: 6px;
+    }
+
+    /* Bigger touch targets for dragging and the row controls. */
+    .gg-pm-handle {
+        padding: 10px 6px;
+    }
+
+    .gg-pm-control {
+        padding: 10px 7px;
+    }
+
+    .gg-pm-hidden-chip {
+        padding: 6px 12px;
+    }
+
+    .gg-pm-popup .gg-popup-close,
+    .gg-pm-edit-popup .gg-popup-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        margin: -6px -8px 0 auto;
+        font-size: 26px;
+    }
+
+    .gg-pm-popup .gg-popup-footer,
+    .gg-pm-edit-popup .gg-popup-footer {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+        padding-top: 10px;
+    }
+
+    .gg-pm-popup .gg-popup-footer .gg-button,
+    .gg-pm-edit-popup .gg-popup-footer .gg-button {
+        width: 100%;
+        min-height: 44px;
+    }
+
+    /* The list popup has a single Close; the edit popup's Close spans a row. */
+    .gg-pm-popup .gg-popup-footer .gg-button,
+    .gg-pm-edit-popup .gg-popup-footer .gg-button-quiet {
+        grid-column: 1 / -1;
+    }
+
+    .gg-pm-tab {
+        min-height: 40px;
+        padding: 8px 14px;
+    }
+
+    .gg-pm-list,
+    .gg-pm-edit-form {
+        overscroll-behavior: contain;
+    }
+
+    .gg-pm-edit-form {
+        padding-right: 0;
+    }
+
+    .gg-pm-edit-form textarea.gg-editor-textarea {
+        min-height: 180px;
+    }
+}
+
+@media (max-width: 440px) {
+    .gg-pm-popup .gg-popup-footer,
+    .gg-pm-edit-popup .gg-popup-footer {
+        grid-template-columns: 1fr;
+    }
+
+    .gg-pm-field {
+        flex-basis: 100%;
+        min-width: 0;
+    }
+}
+

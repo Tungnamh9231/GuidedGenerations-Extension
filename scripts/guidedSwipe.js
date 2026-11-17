@@ -1,6 +1,7 @@
 // scripts/guidedSwipe.js
 
 import { getContext, extension_settings, debugLog, setPreviousImpersonateInput, getPreviousImpersonateInput, getPromptValue, fillPromptTemplate } from './persistentGuides/guideExports.js'; // Import from central hub
+import { registerInjectionPromptSlot } from './promptManager/store.js';
 
 // Helper function for delays
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -194,6 +195,7 @@ const guidedSwipe = async () => {
             if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
                 const context = SillyTavern.getContext();
                 if (typeof context.executeSlashCommandsWithOptions === 'function') {
+                    registerInjectionPromptSlot('script_inject_instruct', 'promptGuidedSwipe');
                     await context.executeSlashCommandsWithOptions(stscriptCommand);
                     debugLog('[Swipe] Executed Command:', stscriptCommand); 
                 } else {

@@ -2,6 +2,7 @@
  * @file Contains the logic for the Guided Response button.
  */
 import { getContext, extension_settings, isGroupChat, setPreviousImpersonateInput, getPreviousImpersonateInput, debugLog, getPromptValue, fillPromptTemplate, pickGroupMember } from './persistentGuides/guideExports.js'; // Import from central hub
+import { registerInjectionPromptSlot } from './promptManager/store.js';
 
 // Import the guide scripts for direct execution
 import thinkingGuide from './persistentGuides/thinkingGuide.js'; // Correct relative path
@@ -66,6 +67,7 @@ const guidedResponse = async () => {
     if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
         const context = SillyTavern.getContext();
         try {
+            registerInjectionPromptSlot('script_inject_instruct', 'promptGuidedResponse');
             await context.executeSlashCommandsWithOptions(stscriptCommand);
             debugLog('[Response] Executed Command:', stscriptCommand); // Log the command
         } catch (error) {

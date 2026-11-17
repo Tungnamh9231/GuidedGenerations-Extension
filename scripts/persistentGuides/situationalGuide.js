@@ -20,7 +20,8 @@ const situationalGuide = async (isAuto = false) => {
         finalCommand,
         isAuto,
         previousInjectionAction: 'flush',
-        raw: extension_settings[extensionName]?.rawPromptSituational ?? false
+        raw: extension_settings[extensionName]?.rawPromptSituational ?? false,
+        promptKey: 'promptSituational'
     });
 };
 

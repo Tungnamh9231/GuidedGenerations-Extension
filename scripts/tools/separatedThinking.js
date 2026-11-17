@@ -13,6 +13,7 @@ import {
     generateNewSwipe,
 } from '../persistentGuides/guideExports.js';
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
+import { registerInjectionPromptSlot } from '../promptManager/store.js';
 
 const INJECT_ID = 'separated_thinking';
 const SCRIPT_PROMPT_KEY = 'script_inject_';
@@ -119,6 +120,7 @@ export default async function separatedThinking({ suppressAlerts = false } = {})
                 profileName: profileValue,
                 presetName: presetValue,
                 prompt: promptForModel,
+                promptKey: 'promptSeparatedThinking',
                 debugLabel: 'separatedThinking',
                 includeChatHistory: false,
             });
@@ -134,6 +136,7 @@ export default async function separatedThinking({ suppressAlerts = false } = {})
             // correction prompt as an ephemeral "quiet" prompt and trigger a
             // normal ST swipe generation, so the result lands as a proper swipe
             // with full swipe_info/extra handled by ST itself.
+            registerInjectionPromptSlot(`${SCRIPT_PROMPT_KEY}${INJECT_ID}`, 'promptSeparatedThinking');
             setTemporaryInjection(context, promptForModel);
             try {
                 const ok = await generateNewSwipe();

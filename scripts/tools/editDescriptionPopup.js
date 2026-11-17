@@ -17,8 +17,7 @@ import {
     getPromptValue,
     fillPromptTemplate
 } from '../persistentGuides/guideExports.js'; // Import from central hub
-
-import { PromptTabManager } from './promptTabManager.js';
+import { openRequestPromptSlot, closeRequestPromptSlot } from '../promptManager/store.js';
 
 
 
@@ -231,43 +230,6 @@ export class EditDescriptionPopup {
                 `;
             });
 
-            this.promptTabManager = new PromptTabManager('editDescription', [
-                { 
-                    key: 'editExisting', 
-                    label: 'Edit Existing', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User edit instruction' },
-                        { short: 'cd', long: 'currentDescription', desc: 'Current character description' },
-                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
-                    ]
-                },
-                { 
-                    key: 'makeNew', 
-                    label: 'Create New', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User creation instruction' },
-                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
-                    ]
-                },
-                { 
-                    key: 'makeNewWithFormat', 
-                    label: 'Create New with Format', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User creation instruction' },
-                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
-                    ]
-                },
-                { 
-                    key: 'createWorld', 
-                    label: 'Create World', 
-                    variables: [
-                        { short: 'i', long: 'instruction', desc: 'User world creation instruction' },
-                        { short: 'f', long: 'formatList', desc: 'Format list defined in Format tab' }
-                    ]
-                }
-            ]);
-            const promptTabHtml = this.promptTabManager.getHtml();
-
             const popupHtml = `
                 <div id="editDescriptionPopup" class="gg-popup gg-editor-popup" role="dialog" aria-modal="true" aria-labelledby="gg-edit-description-title" aria-hidden="true">
                     <div class="gg-popup-content gg-editor-dialog gg-description-editor-dialog">
@@ -295,10 +257,6 @@ export class EditDescriptionPopup {
                                 <button type="button" id="gg-description-tab-format" class="gg-tab-btn" data-tab="format" role="tab" aria-selected="false" aria-controls="gg-tab-format">
                                     <i class="fa-solid fa-list-check" aria-hidden="true"></i>
                                     <span>Output Format</span>
-                                </button>
-                                <button type="button" id="gg-description-tab-prompts" class="gg-tab-btn" data-tab="prompts" role="tab" aria-selected="false" aria-controls="gg-tab-prompts">
-                                    <i class="fa-solid fa-terminal" aria-hidden="true"></i>
-                                    <span>Prompt</span>
                                 </button>
                             </div>
 
@@ -365,10 +323,6 @@ export class EditDescriptionPopup {
                                 </section>
                             </div>
 
-                            <div id="gg-tab-prompts" class="gg-tab-content" role="tabpanel" aria-labelledby="gg-description-tab-prompts" hidden>
-                                ${promptTabHtml}
-                            </div>
-
                             ${GUIDEBOOK_HTML}
                         </div>
                         <div class="gg-popup-footer-wrap gg-editor-footer-wrap">
@@ -420,9 +374,6 @@ export class EditDescriptionPopup {
 
         // Setup event listeners
         this.setupEventListeners();
-        if (this.promptTabManager) {
-            this.promptTabManager.setupEventListeners(this.popupElement);
-        }
 
         this.initialized = true;
     }
@@ -496,7 +447,7 @@ export class EditDescriptionPopup {
 
                 // Toggle footer
                 if (footerWrap) {
-                    footerWrap.hidden = targetTab === 'format' || targetTab === 'prompts';
+                    footerWrap.hidden = targetTab === 'format';
                 }
             });
         });
@@ -888,17 +839,20 @@ export class EditDescriptionPopup {
                 }
             }
 
+            const promptKey = mode === 'editExisting'
+                ? 'editDescription.editExisting'
+                : mode === 'createWorld'
+                    ? 'editDescription.createWorld'
+                    : (formatList ? 'editDescription.makeNewWithFormat' : 'editDescription.makeNew');
+            const readTemplate = key => getPromptValue(`editDescription.${key}`, '', { settings: extension_settings[extensionName] });
+
             let promptText = '';
             if (mode === 'editExisting') {
-                const template = await this.promptTabManager.getPrompt('editExisting');
-                promptText = fillPromptTemplate(template, { instruction, currentDescription, formatList });
+                promptText = fillPromptTemplate(await readTemplate('editExisting'), { instruction, currentDescription, formatList });
             } else if (mode === 'createWorld') {
-                const template = await this.promptTabManager.getPrompt('createWorld');
-                promptText = fillPromptTemplate(template, { instruction, formatList });
+                promptText = fillPromptTemplate(await readTemplate('createWorld'), { instruction, formatList });
             } else {
-                const templateName = formatList ? 'makeNewWithFormat' : 'makeNew';
-                const template = await this.promptTabManager.getPrompt(templateName);
-                promptText = fillPromptTemplate(template, { instruction, formatList });
+                promptText = fillPromptTemplate(await readTemplate(formatList ? 'makeNewWithFormat' : 'makeNew'), { instruction, formatList });
             }
 
             let generatedDescription = '';
@@ -906,19 +860,27 @@ export class EditDescriptionPopup {
             debugLog('[EditDescription] Using /gen with chat isolation...');
 
             const originalChat = [...(context.chat || [])];
+            let requestSlot = '';
             if (context.chat) {
                 context.chat.length = 0;
+                // Chat completion: the task prompt is announced to the extension
+                // Prompt Manager, which decides where it is sent. Text completion
+                // has no prompt manager, so keep the old single-message approach.
+                if (context.mainApi === 'openai') {
+                    requestSlot = openRequestPromptSlot(context, promptKey, promptText);
+                }
+                if (!requestSlot) {
+                    // Push the prompt as a User message in isolated context
+                    context.chat.push({
+                        name: 'User',
+                        is_user: true,
+                        is_system: false,
+                        send_date: Date.now(),
+                        mes: promptText,
+                        extra: { type: 'temp_desc_gen' }
+                    });
+                }
             }
-
-            // Push the prompt as a User message in isolated context
-            context.chat.push({
-                name: 'User',
-                is_user: true,
-                is_system: false,
-                send_date: Date.now(),
-                mes: promptText,
-                extra: { type: 'temp_desc_gen' }
-            });
 
             // Toggle send button state to show generation is happening
             setSendButtonState?.(true);
@@ -941,6 +903,7 @@ export class EditDescriptionPopup {
             } catch (fallbackError) {
                 console.error('[GuidedGenerations] Description generation failed:', fallbackError);
             } finally {
+                closeRequestPromptSlot(context, requestSlot);
                 if (context.chat) {
                     context.chat.length = 0;
                     context.chat.push(...originalChat);

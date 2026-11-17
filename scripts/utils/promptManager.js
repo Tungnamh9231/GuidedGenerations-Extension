@@ -3,6 +3,15 @@ const PROMPTS_FILE_PATH = 'scripts/extensions/third-party/GuidedGenerations-Exte
 let promptCatalogPromise = null;
 let promptCatalog = null;
 
+// The prompt manager writes every user edit into customPrompts; the resolver lets
+// this module read them without importing the extension settings (avoids a cycle
+// through guideExports).
+let overrideResolver = null;
+
+export function setPromptOverrideResolver(resolver) {
+    overrideResolver = typeof resolver === 'function' ? resolver : null;
+}
+
 function getNestedValue(source, keyPath) {
     if (!source || !keyPath) return undefined;
     return String(keyPath).split('.').reduce((current, part) => {
@@ -49,6 +58,9 @@ export async function loadPromptCatalog({ force = false } = {}) {
 }
 
 export async function getPromptValue(keyPath, fallback = '', { settings = null, settingsKey = keyPath } = {}) {
+    const customOverride = overrideResolver?.(keyPath);
+    if (typeof customOverride === 'string') return customOverride;
+
     const overrideSettingKey = getPromptOverrideSettingKey(settingsKey);
     // The flag is named "Use prompts.json". When checked (default), the
     // external prompts.json file takes precedence over the internal settings

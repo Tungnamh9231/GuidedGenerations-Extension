@@ -27,7 +27,8 @@ const thinkingGuide = async (isAuto = false) => {
         finalCommand,
         isAuto,
         previousInjectionAction: 'flush',
-        raw: extension_settings[extensionName]?.rawPromptThinking ?? false
+        raw: extension_settings[extensionName]?.rawPromptThinking ?? false,
+        promptKey: 'promptThinking'
     });
 };
 

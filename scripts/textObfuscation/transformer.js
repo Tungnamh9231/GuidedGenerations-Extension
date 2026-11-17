@@ -1,10 +1,46 @@
-import { MAX_REPORT_SAMPLES, ZERO_WIDTH_SPACE } from './constants.js';
+import {
+    ALL_MARKERS,
+    MARKER_LABELS,
+    MARKER_SETS,
+    MAX_REPORT_SAMPLES,
+} from './constants.js';
 
-const WORD_BOUNDARY_CLASS = '\\p{L}\\p{N}\\p{M}_';
+const MARKER_CHARS = new Set(ALL_MARKERS);
+const WORD_BOUNDARY_RE = /[\p{L}\p{N}\p{M}_]/u;
+
+// Common filter sanitizers strip format characters before matching, so a word
+// that keeps a marker the sanitizer does not know about still slips through.
+// Cyrillic lookalikes cover the sanitizer that strips every invisible character.
+const HOMOGLYPHS = new Map([
+    ['a', '\u0430'], ['c', '\u0441'], ['e', '\u0435'], ['i', '\u0456'], ['j', '\u0458'],
+    ['o', '\u043E'], ['p', '\u0440'], ['s', '\u0455'], ['x', '\u0445'], ['y', '\u0443'],
+    ['A', '\u0410'], ['B', '\u0412'], ['C', '\u0421'], ['E', '\u0415'], ['H', '\u041D'],
+    ['I', '\u0406'], ['K', '\u041A'], ['M', '\u041C'], ['O', '\u041E'], ['P', '\u0420'],
+    ['S', '\u0405'], ['T', '\u0422'], ['X', '\u0425'], ['Y', '\u0423'],
+]);
+
+const PROTECT_PATTERNS = [
+    /```[\s\S]*?```/gu,           // fenced code blocks
+    /`[^`\n]*`/gu,                // inline code
+    /\bhttps?:\/\/[^\s<>"'`]+/giu // URLs
+];
+
+const CACHE_LIMIT = 200;
+const CACHE_MAX_TEXT_LENGTH = 20000;
+const FOLD_CACHE_LIMIT = 4096;
+const textCache = new Map();
+const foldCache = new Map();
+
 let wordSegmenter = null;
+let graphemeSegmenter = null;
 
-function escapeRegExp(value) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function hashString(value) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash >>> 0;
 }
 
 function codePointLength(value) {
@@ -15,23 +51,47 @@ function patternKey(pattern) {
     return String(pattern).toLowerCase();
 }
 
-function countOccurrences(value, needle) {
-    if (!needle) return 0;
+function containsMarker(value) {
+    for (const ch of String(value ?? '')) {
+        if (MARKER_CHARS.has(ch)) return true;
+    }
+    return false;
+}
+
+export function countMarkers(value) {
     let count = 0;
-    let cursor = 0;
-    while (cursor <= value.length - needle.length) {
-        const index = value.indexOf(needle, cursor);
-        if (index === -1) break;
-        count += 1;
-        cursor = index + needle.length;
+    for (const ch of String(value ?? '')) {
+        if (MARKER_CHARS.has(ch)) count += 1;
     }
     return count;
+}
+
+export function stripMarkersFromText(value) {
+    const text = String(value ?? '');
+    let result = '';
+    let changed = false;
+    for (const ch of text) {
+        if (MARKER_CHARS.has(ch)) {
+            changed = true;
+            continue;
+        }
+        result += ch;
+    }
+    return changed ? result : text;
+}
+
+export function escapeZeroWidthForDisplay(text) {
+    let result = '';
+    for (const ch of String(text ?? '')) {
+        result += MARKER_LABELS[ch] ? `⟦${MARKER_LABELS[ch]}⟧` : ch;
+    }
+    return result;
 }
 
 function sanitizeRule(rule, index = 0) {
     if (!rule || typeof rule !== 'object') return null;
     const pattern = String(rule.pattern ?? rule.text ?? '').trim();
-    if (!pattern || pattern.includes(ZERO_WIDTH_SPACE)) return null;
+    if (!pattern || containsMarker(pattern)) return null;
     return {
         id: String(rule.id ?? `rule-${index + 1}`),
         pattern,
@@ -63,42 +123,101 @@ export function normalizeRules(rules) {
     return normalized.map(({ _order, ...rule }) => rule);
 }
 
-function compileRule(rule) {
-    const escaped = escapeRegExp(rule.pattern);
-    const flags = rule.caseSensitive ? 'gu' : 'giu';
-    if (rule.strictWord) {
-        return {
-            ...rule,
-            regex: new RegExp(`(^|[^${WORD_BOUNDARY_CLASS}])(${escaped})(?![${WORD_BOUNDARY_CLASS}])`, flags),
-            matchGroup: 2,
-            prefixGroup: 1,
-        };
-    }
-    return {
-        ...rule,
-        regex: new RegExp(`(${escaped})`, flags),
-        matchGroup: 1,
-        prefixGroup: 0,
-    };
+// Case folding is per code point so Aho–Corasick match offsets stay aligned
+// with the original text. Characters whose lowercase form changes length
+// (e.g. Turkish İ) are compared as-is.
+function foldChar(ch) {
+    const cached = foldCache.get(ch);
+    if (cached !== undefined) return cached;
+    const lower = ch.toLowerCase();
+    const folded = codePointLength(lower) === 1 ? lower : ch;
+    if (foldCache.size > FOLD_CACHE_LIMIT) foldCache.clear();
+    foldCache.set(ch, folded);
+    return folded;
 }
 
-export function buildMatcher(rules) {
+function buildAutomaton(entries) {
+    const nodes = [{ next: new Map(), fail: 0, out: [] }];
+    for (const { rule, cps } of entries) {
+        let state = 0;
+        for (const ch of cps) {
+            let nextState = nodes[state].next.get(ch);
+            if (nextState === undefined) {
+                nextState = nodes.length;
+                nodes.push({ next: new Map(), fail: 0, out: [] });
+                nodes[state].next.set(ch, nextState);
+            }
+            state = nextState;
+        }
+        nodes[state].out.push({ rule, length: cps.length });
+    }
+
+    const queue = [];
+    for (const child of nodes[0].next.values()) queue.push(child);
+    for (let head = 0; head < queue.length; head += 1) {
+        const state = queue[head];
+        for (const [ch, child] of nodes[state].next) {
+            let fail = nodes[state].fail;
+            while (fail !== 0 && !nodes[fail].next.has(ch)) fail = nodes[fail].fail;
+            const target = nodes[fail].next.get(ch);
+            nodes[child].fail = target !== undefined && target !== child ? target : 0;
+            if (nodes[child].fail !== 0) {
+                nodes[child].out = nodes[child].out.concat(nodes[nodes[child].fail].out);
+            }
+            queue.push(child);
+        }
+    }
+    return nodes;
+}
+
+export function buildMatcher(rules, options = {}) {
     const normalized = normalizeRules(rules);
     if (!normalized.length) return null;
-    try {
-        return { rules: normalized.map(compileRule) };
-    } catch (error) {
-        console.error('[GG Unicode Sensitive Words] Failed to compile rule matcher.', error);
-        return null;
+
+    const markerSet = MARKER_SETS[options.markerSet] ?? MARKER_SETS.balanced;
+    const markerChars = [...markerSet.chars];
+    const matcher = {
+        rules: normalized.map((rule, order) => ({ ...rule, order })),
+        markerChars,
+        useHomoglyphs: Boolean(options.useHomoglyphs),
+        protectSpans: Boolean(options.protectSpans),
+    };
+
+    const sensitiveEntries = [];
+    const insensitiveEntries = [];
+    for (const rule of matcher.rules) {
+        if (rule.caseSensitive) {
+            sensitiveEntries.push({ rule, cps: Array.from(rule.pattern) });
+        } else {
+            insensitiveEntries.push({ rule, cps: Array.from(rule.pattern).map(foldChar) });
+        }
     }
+
+    matcher.automata = {
+        sensitive: sensitiveEntries.length ? buildAutomaton(sensitiveEntries) : null,
+        insensitive: insensitiveEntries.length ? buildAutomaton(insensitiveEntries) : null,
+    };
+    matcher.signature = JSON.stringify({
+        markerChars,
+        useHomoglyphs: matcher.useHomoglyphs,
+        protectSpans: matcher.protectSpans,
+        rules: matcher.rules.map(rule => [rule.pattern, rule.strictWord, rule.caseSensitive, rule.allWords, rule.order]),
+    });
+    return matcher;
 }
 
-function insertAfterFirstCodePoint(value) {
-    if (!value || value.includes(ZERO_WIDTH_SPACE)) return value;
-    const codePoint = value.codePointAt(0);
-    if (codePoint === undefined) return value;
-    const first = String.fromCodePoint(codePoint);
-    return `${first}${ZERO_WIDTH_SPACE}${value.slice(first.length)}`;
+function scanAutomaton(nodes, cps, fold, matches) {
+    let state = 0;
+    for (let index = 0; index < cps.length; index += 1) {
+        const ch = fold ? foldChar(cps[index]) : cps[index];
+        while (state !== 0 && !nodes[state].next.has(ch)) state = nodes[state].fail;
+        const nextState = nodes[state].next.get(ch);
+        state = nextState === undefined ? 0 : nextState;
+        if (state === 0) continue;
+        for (const out of nodes[state].out) {
+            matches.push({ rule: out.rule, start: index + 1 - out.length, end: index + 1 });
+        }
+    }
 }
 
 function getWordSegmenter() {
@@ -113,42 +232,288 @@ function getWordSegmenter() {
     return wordSegmenter;
 }
 
-function insertIntoEveryWord(value) {
+function getGraphemeSegmenter() {
+    if (graphemeSegmenter !== null) return graphemeSegmenter;
+    try {
+        graphemeSegmenter = typeof Intl?.Segmenter === 'function'
+            ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+            : false;
+    } catch {
+        graphemeSegmenter = false;
+    }
+    return graphemeSegmenter;
+}
+
+function segmentWords(value) {
     const segmenter = getWordSegmenter();
     if (segmenter) {
-        let result = '';
-        let cursor = 0;
-        let changed = false;
+        const parts = [];
         for (const part of segmenter.segment(value)) {
-            result += value.slice(cursor, part.index);
-            if (part.isWordLike) {
-                const transformed = insertAfterFirstCodePoint(part.segment);
-                result += transformed;
-                changed ||= transformed !== part.segment;
-            } else {
-                result += part.segment;
-            }
-            cursor = part.index + part.segment.length;
+            parts.push({ segment: part.segment, isWordLike: Boolean(part.isWordLike) });
         }
-        result += value.slice(cursor);
-        return changed ? result : insertAfterFirstCodePoint(value);
+        return parts;
+    }
+    const parts = [];
+    const regex = /[\p{L}\p{N}\p{M}_]+/gu;
+    let cursor = 0;
+    let match;
+    while ((match = regex.exec(value)) !== null) {
+        if (match.index > cursor) parts.push({ segment: value.slice(cursor, match.index), isWordLike: false });
+        parts.push({ segment: match[0], isWordLike: true });
+        cursor = match.index + match[0].length;
+    }
+    if (cursor < value.length) parts.push({ segment: value.slice(cursor), isWordLike: false });
+    return parts;
+}
+
+function splitGraphemes(value) {
+    const segmenter = getGraphemeSegmenter();
+    if (!segmenter) return Array.from(value);
+    const clusters = [];
+    for (const part of segmenter.segment(value)) clusters.push(part.segment);
+    return clusters;
+}
+
+// Insert near the middle of the word (never inside a grapheme cluster) so the
+// model still reads it as one word instead of "first letter + garbage".
+function insertMarkerIntoWord(word, marker) {
+    const clusters = splitGraphemes(word);
+    if (clusters.length < 2) return word;
+    const index = Math.max(1, Math.min(clusters.length - 1, Math.floor(clusters.length / 2)));
+    return clusters.slice(0, index).join('') + marker + clusters.slice(index).join('');
+}
+
+function applyHomoglyph(word) {
+    const chars = Array.from(word);
+    for (let index = 1; index < chars.length; index += 1) {
+        const mapped = HOMOGLYPHS.get(chars[index]);
+        if (mapped) {
+            chars[index] = mapped;
+            return chars.join('');
+        }
+    }
+    for (let index = 0; index < chars.length; index += 1) {
+        const mapped = HOMOGLYPHS.get(chars[index]);
+        if (mapped) {
+            chars[index] = mapped;
+            return chars.join('');
+        }
+    }
+    return word;
+}
+
+function pickMarker(markerChars, seed) {
+    if (markerChars.length <= 1) return markerChars[0];
+    return markerChars[hashString(seed) % markerChars.length];
+}
+
+function transformWord(word, config, seed) {
+    const next = config.useHomoglyphs ? applyHomoglyph(word) : word;
+    return insertMarkerIntoWord(next, pickMarker(config.markerChars, seed));
+}
+
+function applySingleWordMatch(match, config, seed) {
+    const parts = segmentWords(match);
+    let bestIndex = -1;
+    let bestLength = 0;
+    for (let index = 0; index < parts.length; index += 1) {
+        if (!parts[index].isWordLike) continue;
+        const length = codePointLength(parts[index].segment);
+        if (length > bestLength) {
+            bestLength = length;
+            bestIndex = index;
+        }
+    }
+    if (bestIndex === -1) {
+        return insertMarkerIntoWord(match, pickMarker(config.markerChars, seed));
+    }
+    let result = '';
+    for (let index = 0; index < parts.length; index += 1) {
+        result += index === bestIndex
+            ? transformWord(parts[index].segment, config, `${seed}\u0000${index}`)
+            : parts[index].segment;
+    }
+    return result;
+}
+
+function applyEveryWordMatch(match, config, seed) {
+    const parts = segmentWords(match);
+    let hasWord = false;
+    let result = '';
+    for (let index = 0; index < parts.length; index += 1) {
+        if (parts[index].isWordLike) {
+            hasWord = true;
+            result += transformWord(parts[index].segment, config, `${seed}\u0000${index}`);
+        } else {
+            result += parts[index].segment;
+        }
+    }
+    if (!hasWord) return insertMarkerIntoWord(match, pickMarker(config.markerChars, seed));
+    return result;
+}
+
+function transformMatch(match, rule, config, seed) {
+    return rule.allWords
+        ? applyEveryWordMatch(match, config, seed)
+        : applySingleWordMatch(match, config, seed);
+}
+
+export function obfuscateForRule(match, rule, options = {}) {
+    const markerSet = MARKER_SETS[options.markerSet] ?? MARKER_SETS.balanced;
+    const config = {
+        markerChars: [...markerSet.chars],
+        useHomoglyphs: Boolean(options.useHomoglyphs),
+    };
+    const effectiveRule = {
+        pattern: String(rule?.pattern ?? match),
+        allWords: Boolean(rule?.allWords),
+    };
+    return transformMatch(String(match), effectiveRule, config, effectiveRule.pattern);
+}
+
+function findProtectedRanges(text) {
+    const ranges = [];
+    for (const pattern of PROTECT_PATTERNS) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            ranges.push([match.index, match.index + match[0].length]);
+            if (match[0].length === 0) pattern.lastIndex += 1;
+        }
+    }
+    if (!ranges.length) return ranges;
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const range of ranges) {
+        const last = merged[merged.length - 1];
+        if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+        else merged.push([range[0], range[1]]);
+    }
+    return merged;
+}
+
+function buildUnitOffsets(cps) {
+    const offsets = new Array(cps.length + 1);
+    offsets[0] = 0;
+    for (let index = 0; index < cps.length; index += 1) {
+        offsets[index + 1] = offsets[index] + cps[index].length;
+    }
+    return offsets;
+}
+
+function intersectsRanges(start, end, ranges) {
+    let low = 0;
+    let high = ranges.length - 1;
+    let candidate = -1;
+    while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (ranges[mid][1] > start) {
+            candidate = mid;
+            high = mid - 1;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return candidate !== -1 && ranges[candidate][0] < end;
+}
+
+function createStats() {
+    return {
+        replacements: 0,
+        insertedMarkers: 0,
+        ruleIds: new Set(),
+        samples: [],
+        sampleKeys: new Set(),
+    };
+}
+
+function recordReplacement(stats, rule, match, transformed) {
+    stats.replacements += 1;
+    stats.ruleIds.add(rule.id);
+    stats.insertedMarkers += Math.max(0, countMarkers(transformed) - countMarkers(match));
+    if (stats.samples.length >= MAX_REPORT_SAMPLES) return;
+    const sampleKey = `${rule.id}\u0000${match}\u0000${transformed}`;
+    if (stats.sampleKeys.has(sampleKey)) return;
+    stats.sampleKeys.add(sampleKey);
+    stats.samples.push({
+        pattern: rule.pattern,
+        before: match,
+        after: escapeZeroWidthForDisplay(transformed),
+    });
+}
+
+function applyTransform(text, matcher) {
+    const cps = Array.from(text);
+    const unitOffsets = buildUnitOffsets(cps);
+    const protectedRanges = matcher.protectSpans ? findProtectedRanges(text) : [];
+
+    const candidates = [];
+    if (matcher.automata.sensitive) scanAutomaton(matcher.automata.sensitive, cps, false, candidates);
+    if (matcher.automata.insensitive) scanAutomaton(matcher.automata.insensitive, cps, true, candidates);
+    candidates.sort((a, b) => a.start - b.start || (b.end - a.end) || (a.rule.order - b.rule.order));
+
+    const stats = createStats();
+    let output = '';
+    let lastUnit = 0;
+    let acceptedEnd = 0;
+
+    for (const candidate of candidates) {
+        if (candidate.start < acceptedEnd) continue;
+
+        if (candidate.rule.strictWord) {
+            const before = cps[candidate.start - 1];
+            const after = cps[candidate.end];
+            if (before && WORD_BOUNDARY_RE.test(before)) continue;
+            if (after && WORD_BOUNDARY_RE.test(after)) continue;
+        }
+
+        const unitStart = unitOffsets[candidate.start];
+        const unitEnd = unitOffsets[candidate.end];
+        if (protectedRanges.length && intersectsRanges(unitStart, unitEnd, protectedRanges)) continue;
+
+        const match = cps.slice(candidate.start, candidate.end).join('');
+        if (containsMarker(match)) continue;
+
+        const transformed = transformMatch(
+            match,
+            candidate.rule,
+            matcher,
+            `${candidate.rule.pattern}\u0000${match}\u0000${candidate.start}`,
+        );
+        if (transformed === match) continue;
+
+        output += text.slice(lastUnit, unitStart) + transformed;
+        lastUnit = unitEnd;
+        acceptedEnd = candidate.end;
+        recordReplacement(stats, candidate.rule, match, transformed);
     }
 
-    let changed = false;
-    const transformed = value.replace(/[\p{L}\p{N}\p{M}_]+/gu, word => {
-        const next = insertAfterFirstCodePoint(word);
-        changed ||= next !== word;
-        return next;
-    });
-    return changed ? transformed : insertAfterFirstCodePoint(value);
+    if (lastUnit === 0) return { transformed: text, stats };
+    output += text.slice(lastUnit);
+    return { transformed: output, stats };
 }
 
-export function obfuscateForRule(match, rule) {
-    return rule?.allWords ? insertIntoEveryWord(match) : insertAfterFirstCodePoint(match);
-}
-
-export function escapeZeroWidthForDisplay(text) {
-    return String(text ?? '').split(ZERO_WIDTH_SPACE).join('⟦ZWSP⟧');
+export function transformTextWithStats(text, matcher) {
+    if (!text) return { transformed: text, stats: createStats() };
+    const cacheable = text.length <= CACHE_MAX_TEXT_LENGTH;
+    const cacheKey = cacheable ? `${matcher.signature}\u0000${text}` : '';
+    if (cacheable) {
+        const cached = textCache.get(cacheKey);
+        if (cached) {
+            textCache.delete(cacheKey);
+            textCache.set(cacheKey, cached);
+            return cached;
+        }
+    }
+    const result = applyTransform(text, matcher);
+    if (cacheable) {
+        textCache.set(cacheKey, result);
+        if (textCache.size > CACHE_LIMIT) {
+            const oldestKey = textCache.keys().next().value;
+            textCache.delete(oldestKey);
+        }
+    }
+    return result;
 }
 
 function hasSignatureLikeValue(value, seen = new WeakSet()) {
@@ -192,58 +557,26 @@ function createReport(matcher, protectedThrough) {
     };
 }
 
-function recordReplacement(report, rule, match, transformed) {
-    report.replacements += 1;
-    report._matchedRuleIds.add(rule.id);
-    report.insertedMarkers += Math.max(0, countOccurrences(transformed, ZERO_WIDTH_SPACE) - countOccurrences(match, ZERO_WIDTH_SPACE));
-
-    const sampleKey = `${rule.id}\u0000${match}\u0000${transformed}`;
-    if (report.samples.length >= MAX_REPORT_SAMPLES || report._sampleKeys.has(sampleKey)) return;
-    report._sampleKeys.add(sampleKey);
-    report.samples.push({
-        pattern: rule.pattern,
-        before: match,
-        after: escapeZeroWidthForDisplay(transformed),
-    });
-}
-
 function recordVerificationBlock(report, transformedText) {
     report._verificationBlocks.push(transformedText);
 }
 
-function transformWithRule(text, rule, report) {
-    rule.regex.lastIndex = 0;
-    return text.replace(rule.regex, (...args) => {
-        const fullMatch = args[0];
-        const source = args.at(-1);
-        const offset = args.at(-2);
-        const prefix = rule.prefixGroup ? (args[rule.prefixGroup] ?? '') : '';
-        const match = args[rule.matchGroup] ?? fullMatch;
-        const firstCodePoint = match.codePointAt(0);
-        if (firstCodePoint === undefined) return fullMatch;
+function applyToText(text, matcher, report) {
+    const { transformed, stats } = transformTextWithStats(text, matcher);
+    if (transformed === text) return text;
 
-        // Idempotency for single-code-point patterns: their marker sits directly
-        // after the matched character, so the literal pattern would otherwise
-        // still match on a second pass.
-        const matchStart = offset + prefix.length;
-        const first = String.fromCodePoint(firstCodePoint);
-        if (match.includes(ZERO_WIDTH_SPACE) || source[matchStart + first.length] === ZERO_WIDTH_SPACE) {
-            return fullMatch;
-        }
-
-        const transformed = obfuscateForRule(match, rule);
-        if (transformed === match) return fullMatch;
-        recordReplacement(report, rule, match, transformed);
-        return `${prefix}${transformed}`;
-    });
-}
-
-function transformText(text, matcher, report) {
-    let transformed = text;
-    for (const rule of matcher.rules) {
-        transformed = transformWithRule(transformed, rule, report);
+    report.replacements += stats.replacements;
+    report.insertedMarkers += stats.insertedMarkers;
+    for (const ruleId of stats.ruleIds) report._matchedRuleIds.add(ruleId);
+    for (const sample of stats.samples) {
+        if (report.samples.length >= MAX_REPORT_SAMPLES) break;
+        const sampleKey = `${sample.pattern}\u0000${sample.before}\u0000${sample.after}`;
+        if (report._sampleKeys.has(sampleKey)) continue;
+        report._sampleKeys.add(sampleKey);
+        report.samples.push(sample);
     }
-    if (transformed !== text) report.textBlocks += 1;
+    report.textBlocks += 1;
+    recordVerificationBlock(report, transformed);
     return transformed;
 }
 
@@ -306,7 +639,7 @@ export function verifyFinalPayload(generateData, verificationPlan) {
     let observedMarkers = 0;
     for (const text of collectSafePayloadText(generateData.messages)) {
         textCounts.set(text, (textCounts.get(text) ?? 0) + 1);
-        observedMarkers += countOccurrences(text, ZERO_WIDTH_SPACE);
+        observedMarkers += countMarkers(text);
     }
 
     let matchedBlocks = 0;
@@ -346,9 +679,8 @@ export function transformChatInPlace(chat, matcher) {
 
         const content = message.content;
         if (typeof content === 'string') {
-            const transformed = transformText(content, matcher, report);
+            const transformed = applyToText(content, matcher, report);
             if (transformed !== content) {
-                recordVerificationBlock(report, transformed);
                 stagedMessages.push([index, { ...message, content: transformed }]);
             }
             continue;
@@ -361,10 +693,9 @@ export function transformChatInPlace(chat, matcher) {
         for (let blockIndex = 0; blockIndex < content.length; blockIndex += 1) {
             const block = content[blockIndex];
             if (!block || typeof block !== 'object' || block.type !== 'text' || typeof block.text !== 'string') continue;
-            const transformed = transformText(block.text, matcher, report);
+            const transformed = applyToText(block.text, matcher, report);
             if (transformed === block.text) continue;
 
-            recordVerificationBlock(report, transformed);
             if (!contentChanged) nextContent = content.slice();
             nextContent[blockIndex] = { ...block, text: transformed };
             contentChanged = true;

@@ -35,6 +35,7 @@ const customAutoGuide = async (isAuto = false) => {
         isAuto,
         previousInjectionAction: 'move', // Or 'replace'/'add' depending on desired behavior
         raw: extension_settings[extensionName]?.rawPromptCustomAuto ?? false,
+        promptKey: 'customAutoGuidePrompt',
         enableSetting: 'enableCustomAutoGuide' // Link to its specific enable setting
     });
 };

@@ -1,6 +1,11 @@
 import { getContext } from '../../../../../extensions.js';
 import { peekTextObfuscationSettings } from './store.js';
-import { buildMatcher, transformChatInPlace, verifyFinalPayload } from './transformer.js';
+import {
+    buildMatcher,
+    stripMarkersFromText,
+    transformChatInPlace,
+    verifyFinalPayload,
+} from './transformer.js';
 
 // Keep correlation history deliberately small. Each pending entry can contain a
 // verification plan with transformed chat text, so a large queue retains a lot
@@ -97,6 +102,8 @@ export class TextObfuscationController {
         this.eventSource = null;
         this.promptEventType = null;
         this.settingsEventType = null;
+        this.messageReceivedType = null;
+        this.messageSwipedType = null;
         this.pendingVerifications = [];
         this.pendingDispatches = [];
         this.reportSerial = 0;
@@ -108,6 +115,8 @@ export class TextObfuscationController {
         this.matcherCache = null;
         this.handlePromptReady = this.handlePromptReady.bind(this);
         this.handleSettingsReady = this.handleSettingsReady.bind(this);
+        this.handleMessageReceived = this.handleMessageReceived.bind(this);
+        this.handleMessageSwiped = this.handleMessageSwiped.bind(this);
     }
 
     init() {
@@ -122,9 +131,16 @@ export class TextObfuscationController {
         if (settingsEventType) eventSource.on(settingsEventType, this.handleSettingsReady);
         else console.warn('[GG Unicode Sensitive Words] CHAT_COMPLETION_SETTINGS_READY is unavailable; final payload verification is disabled.');
 
+        const receivedType = context.eventTypes?.MESSAGE_RECEIVED;
+        const swipedType = context.eventTypes?.MESSAGE_SWIPED;
+        if (receivedType) eventSource.on(receivedType, this.handleMessageReceived);
+        if (swipedType) eventSource.on(swipedType, this.handleMessageSwiped);
+
         this.eventSource = eventSource;
         this.promptEventType = promptEventType;
         this.settingsEventType = settingsEventType ?? null;
+        this.messageReceivedType = receivedType ?? null;
+        this.messageSwipedType = swipedType ?? null;
         this.installFetchObserver();
         this.active = true;
     }
@@ -197,6 +213,8 @@ export class TextObfuscationController {
         try {
             this.detach(this.promptEventType, this.handlePromptReady);
             this.detach(this.settingsEventType, this.handleSettingsReady);
+            this.detach(this.messageReceivedType, this.handleMessageReceived);
+            this.detach(this.messageSwipedType, this.handleMessageSwiped);
         } catch (error) {
             console.debug('[GG Unicode Sensitive Words] Could not detach prompt listeners.', error);
         }
@@ -204,6 +222,8 @@ export class TextObfuscationController {
         this.eventSource = null;
         this.promptEventType = null;
         this.settingsEventType = null;
+        this.messageReceivedType = null;
+        this.messageSwipedType = null;
         this.pendingVerifications = [];
         this.pendingDispatches = [];
         this.matcherCacheKey = '';
@@ -229,16 +249,21 @@ export class TextObfuscationController {
         });
     }
 
-    getMatcher(rules) {
+    getMatcher(settings) {
+        const options = {
+            markerSet: settings.markerSet,
+            useHomoglyphs: settings.useHomoglyphs,
+            protectSpans: settings.protectSpans,
+        };
         let key = '';
         try {
-            key = JSON.stringify(rules ?? []);
+            key = JSON.stringify({ rules: settings.rules ?? [], ...options });
         } catch {
-            return buildMatcher(rules);
+            return buildMatcher(settings.rules, options);
         }
         if (key === this.matcherCacheKey) return this.matcherCache;
         this.matcherCacheKey = key;
-        this.matcherCache = buildMatcher(rules);
+        this.matcherCache = buildMatcher(settings.rules, options);
         return this.matcherCache;
     }
 
@@ -305,7 +330,7 @@ export class TextObfuscationController {
             const settings = peekTextObfuscationSettings();
             if (!settings.enabled) return;
 
-            const matcher = this.getMatcher(settings.rules);
+            const matcher = this.getMatcher(settings);
             if (!matcher) {
                 if (!eventData?.dryRun) {
                     this.publishReport({
@@ -393,6 +418,68 @@ export class TextObfuscationController {
                     reason: String(error?.message ?? error),
                 },
             });
+        }
+    }
+
+    handleMessageReceived(payload) {
+        this.stripIncomingMessage(payload);
+    }
+
+    handleMessageSwiped(payload) {
+        this.stripIncomingMessage(payload);
+    }
+
+    resolveMessageIndex(payload) {
+        if (Number.isInteger(payload)) return payload;
+        if (payload && typeof payload === 'object') {
+            for (const key of ['messageId', 'messageIndex', 'index', 'id']) {
+                if (Number.isInteger(payload[key])) return payload[key];
+            }
+        }
+        return -1;
+    }
+
+    stripIncomingMessage(payload) {
+        try {
+            const settings = peekTextObfuscationSettings();
+            if (!settings.enabled || !settings.stripIncoming) return;
+
+            const index = this.resolveMessageIndex(payload);
+            if (index < 0) return;
+
+            const context = getContext();
+            const message = context.chat?.[index];
+            if (!message || typeof message !== 'object') return;
+
+            let changed = false;
+            if (typeof message.mes === 'string') {
+                const cleaned = stripMarkersFromText(message.mes);
+                if (cleaned !== message.mes) {
+                    message.mes = cleaned;
+                    changed = true;
+                }
+            }
+            if (Array.isArray(message.swipes)) {
+                for (let swipeIndex = 0; swipeIndex < message.swipes.length; swipeIndex += 1) {
+                    const swipe = message.swipes[swipeIndex];
+                    if (typeof swipe !== 'string') continue;
+                    const cleaned = stripMarkersFromText(swipe);
+                    if (cleaned !== swipe) {
+                        message.swipes[swipeIndex] = cleaned;
+                        changed = true;
+                    }
+                }
+            }
+            if (!changed) return;
+
+            context.saveChatDebounced?.();
+            const textElement = document.querySelector(`#chat .mes[mesid="${index}"] .mes_text`);
+            if (textElement) {
+                const cleanedHtml = stripMarkersFromText(textElement.innerHTML);
+                if (cleanedHtml !== textElement.innerHTML) textElement.innerHTML = cleanedHtml;
+            }
+        } catch (error) {
+            console.debug('[GG Unicode Sensitive Words] Incoming marker cleanup failed safely.', error);
         }
     }
 

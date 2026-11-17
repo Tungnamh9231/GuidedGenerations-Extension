@@ -49,6 +49,7 @@ const guidedImpersonate = async () => {
                 profileName: profileValue,
                 presetName: presetValue,
                 prompt: filledPrompt,
+                promptKey: 'promptImpersonate1st',
                 debugLabel: 'impersonate:1st',
                 includeChatHistory: true,
                 includeIdentityContext: true,
