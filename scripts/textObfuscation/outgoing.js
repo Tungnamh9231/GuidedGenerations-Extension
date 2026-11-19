@@ -11,6 +11,7 @@ let matcherCache = null;
 function getMatcher(settings) {
     const options = {
         markerSet: settings.markerSet,
+        strength: settings.strength,
         useHomoglyphs: settings.useHomoglyphs,
         protectSpans: settings.protectSpans,
     };

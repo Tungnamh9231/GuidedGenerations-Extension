@@ -13,6 +13,16 @@ import {
 // of memory on long chats and multiplies fallback verification work.
 const MAX_PENDING_VERIFICATIONS = 3;
 const CHAT_COMPLETION_ENDPOINT = '/api/backends/chat-completions/generate';
+// Every backend SillyTavern can post a generated payload to. Text-completion
+// backends carry the keywords in a flat `prompt`, so the observer has to see
+// them too or text-mode dispatch is never verified.
+const OBSERVED_ENDPOINTS = new Set([
+    CHAT_COMPLETION_ENDPOINT,
+    '/api/backends/text-completions/generate',
+    '/api/backends/kobold/generate',
+    '/api/backends/koboldhorde/generate',
+    '/api/novelai/generate',
+]);
 
 function getRequestUrl(input) {
     if (typeof input === 'string') return input;
@@ -20,15 +30,25 @@ function getRequestUrl(input) {
     return typeof input?.url === 'string' ? input.url : '';
 }
 
-function isChatCompletionRequest(input) {
+function resolveRequestPath(input) {
     const rawUrl = getRequestUrl(input);
-    if (!rawUrl) return false;
+    if (!rawUrl) return '';
     try {
         const base = globalThis.location?.href ?? 'http://localhost/';
-        return new URL(rawUrl, base).pathname === CHAT_COMPLETION_ENDPOINT;
+        return new URL(rawUrl, base).pathname;
     } catch {
-        return rawUrl.includes(CHAT_COMPLETION_ENDPOINT);
+        return rawUrl;
     }
+}
+
+function observedEndpoint(input) {
+    const path = resolveRequestPath(input);
+    if (!path) return '';
+    if (OBSERVED_ENDPOINTS.has(path)) return path;
+    for (const endpoint of OBSERVED_ENDPOINTS) {
+        if (path.includes(endpoint)) return endpoint;
+    }
+    return '';
 }
 
 function normalizeVerificationResult(result) {
@@ -162,7 +182,8 @@ export class TextObfuscationController {
         const controller = this;
         const wrapper = function (...args) {
             const [input, init] = args;
-            const shouldObserve = isChatCompletionRequest(input);
+            const endpoint = observedEndpoint(input);
+            const shouldObserve = Boolean(endpoint);
             let bodyText = typeof init?.body === 'string' ? init.body : null;
             let requestBodyPromise = null;
 
@@ -180,13 +201,13 @@ export class TextObfuscationController {
 
             if (shouldObserve) {
                 if (bodyText !== null) {
-                    setTimeout(() => controller.handleNetworkDispatch(bodyText), 0);
+                    setTimeout(() => controller.handleNetworkDispatch(bodyText, null, endpoint), 0);
                 } else if (requestBodyPromise) {
                     requestBodyPromise
-                        .then(text => setTimeout(() => controller.handleNetworkDispatch(text), 0))
-                        .catch(error => setTimeout(() => controller.handleNetworkDispatch(null, String(error?.message ?? error)), 0));
+                        .then(text => setTimeout(() => controller.handleNetworkDispatch(text, null, endpoint), 0))
+                        .catch(error => setTimeout(() => controller.handleNetworkDispatch(null, String(error?.message ?? error), endpoint), 0));
                 } else {
-                    setTimeout(() => controller.handleNetworkDispatch(null, 'outgoing request body is unavailable'), 0);
+                    setTimeout(() => controller.handleNetworkDispatch(null, 'outgoing request body is unavailable', endpoint), 0);
                 }
             }
 
@@ -271,6 +292,7 @@ export class TextObfuscationController {
     getMatcher(settings) {
         const options = {
             markerSet: settings.markerSet,
+            strength: settings.strength,
             useHomoglyphs: settings.useHomoglyphs,
             protectSpans: settings.protectSpans,
         };
@@ -399,6 +421,7 @@ export class TextObfuscationController {
             this.publishTextReport({
                 activePatterns: matcher.rules.length,
                 replacements: stats.replacements,
+                swappedLetters: stats.swappedLetters,
                 matchedPatterns: stats.ruleIds.size,
                 textBlocks: 1,
                 protectedMessages: 0,
@@ -530,7 +553,7 @@ export class TextObfuscationController {
         }
     }
 
-    handleNetworkDispatch(bodyText, bodyError = null) {
+    handleNetworkDispatch(bodyText, bodyError = null, endpoint = CHAT_COMPLETION_ENDPOINT) {
         try {
             if (!this.pendingDispatches.length) return;
 
@@ -583,7 +606,7 @@ export class TextObfuscationController {
                     ...normalized,
                     status: normalized.status === 'verified' ? 'verified' : normalized.status,
                     correlation: selected.correlation,
-                    endpoint: CHAT_COMPLETION_ENDPOINT,
+                    endpoint,
                 };
             }
 

@@ -1,23 +1,33 @@
 import {
     ALL_MARKERS,
+    CONFUSABLE_TO_LATIN,
+    HOMOGLYPHS,
     MARKER_LABELS,
     MARKER_SETS,
     MAX_REPORT_SAMPLES,
+    STRIP_ALWAYS,
+    isCombiningMarker,
+    isWordLikeChar,
 } from './constants.js';
 
 const MARKER_CHARS = new Set(ALL_MARKERS);
+const STRIP_ALWAYS_CHARS = new Set(STRIP_ALWAYS);
 const WORD_BOUNDARY_RE = /[\p{L}\p{N}\p{M}_]/u;
 
-// Common filter sanitizers strip format characters before matching, so a word
-// that keeps a marker the sanitizer does not know about still slips through.
-// Cyrillic lookalikes cover the sanitizer that strips every invisible character.
-const HOMOGLYPHS = new Map([
-    ['a', '\u0430'], ['c', '\u0441'], ['e', '\u0435'], ['i', '\u0456'], ['j', '\u0458'],
-    ['o', '\u043E'], ['p', '\u0440'], ['s', '\u0455'], ['x', '\u0445'], ['y', '\u0443'],
-    ['A', '\u0410'], ['B', '\u0412'], ['C', '\u0421'], ['E', '\u0415'], ['H', '\u041D'],
-    ['I', '\u0406'], ['K', '\u041A'], ['M', '\u041C'], ['O', '\u041E'], ['P', '\u0420'],
-    ['S', '\u0405'], ['T', '\u0422'], ['X', '\u0425'], ['Y', '\u0423'],
-]);
+// Each channel in the stack costs one sanitizer stage to remove, and the stages
+// are independent: a Cf-stripper leaves the Mn markers, an Mn-stripper leaves
+// the homoglyphs, an ASCII whitelist leaves nothing to match because the word
+// no longer reads as the keyword. Density scales with the strength profile so a
+// long keyword can absorb an edit-distance-2 fuzzy matcher.
+const STRENGTH_PROFILES = Object.freeze({
+    light: Object.freeze({ markers: 1, homoglyphs: 1 }),
+    balanced: Object.freeze({ markers: 1, homoglyphs: 2 }),
+    paranoid: Object.freeze({ markers: 2, homoglyphs: 3 }),
+});
+
+export function getStrengthProfile(strength) {
+    return STRENGTH_PROFILES[strength] ?? STRENGTH_PROFILES.balanced;
+}
 
 const PROTECT_PATTERNS = [
     /```[\s\S]*?```/gu,           // fenced code blocks
@@ -66,16 +76,27 @@ export function countMarkers(value) {
     return count;
 }
 
+// Combining markers are only stripped when they sit inside a word, which is the
+// only place this extension puts them. A variation selector after an emoji base
+// is meaningful (emoji presentation, ZWJ sequences) and stays untouched.
 export function stripMarkersFromText(value) {
     const text = String(value ?? '');
     let result = '';
     let changed = false;
+    let lastChar = '';
     for (const ch of text) {
-        if (MARKER_CHARS.has(ch)) {
+        if (STRIP_ALWAYS_CHARS.has(ch)) {
             changed = true;
             continue;
         }
+        if (isCombiningMarker(ch)) {
+            if (lastChar && isWordLikeChar(lastChar)) {
+                changed = true;
+                continue;
+            }
+        }
         result += ch;
+        lastChar = ch;
     }
     return changed ? result : text;
 }
@@ -174,12 +195,14 @@ export function buildMatcher(rules, options = {}) {
     const normalized = normalizeRules(rules);
     if (!normalized.length) return null;
 
-    const markerSet = MARKER_SETS[options.markerSet] ?? MARKER_SETS.balanced;
+    const markerSet = MARKER_SETS[options.markerSet] ?? MARKER_SETS.layered;
     const markerChars = [...markerSet.chars];
     const matcher = {
         rules: normalized.map((rule, order) => ({ ...rule, order })),
         markerChars,
         useHomoglyphs: Boolean(options.useHomoglyphs),
+        profile: getStrengthProfile(options.strength),
+        strength: options.strength ?? 'balanced',
         protectSpans: Boolean(options.protectSpans),
     };
 
@@ -200,6 +223,7 @@ export function buildMatcher(rules, options = {}) {
     matcher.signature = JSON.stringify({
         markerChars,
         useHomoglyphs: matcher.useHomoglyphs,
+        profile: matcher.profile,
         protectSpans: matcher.protectSpans,
         rules: matcher.rules.map(rule => [rule.pattern, rule.strictWord, rule.caseSensitive, rule.allWords, rule.order]),
     });
@@ -274,32 +298,50 @@ function splitGraphemes(value) {
     return clusters;
 }
 
-// Insert near the middle of the word (never inside a grapheme cluster) so the
-// model still reads it as one word instead of "first letter + garbage".
-function insertMarkerIntoWord(word, marker) {
-    const clusters = splitGraphemes(word);
-    if (clusters.length < 2) return word;
-    const index = Math.max(1, Math.min(clusters.length - 1, Math.floor(clusters.length / 2)));
-    return clusters.slice(0, index).join('') + marker + clusters.slice(index).join('');
-}
-
-function applyHomoglyph(word) {
+// Swap whole letters for non-NFKC-foldable lookalikes. Swaps are spread out and
+// never adjacent to each other: adjacent swaps read as one foreign run (easy to
+// spot) and cost the same edit distance as a spread pattern.
+function applyHomoglyphs(word, maxSwaps, seed) {
+    if (maxSwaps <= 0) return { word, swaps: 0 };
     const chars = Array.from(word);
-    for (let index = 1; index < chars.length; index += 1) {
-        const mapped = HOMOGLYPHS.get(chars[index]);
-        if (mapped) {
-            chars[index] = mapped;
-            return chars.join('');
-        }
+    if (chars.length === 0) return { word, swaps: 0 };
+
+    const candidates = [];
+    // Very short keywords cannot take a marker without losing the word, so the
+    // homoglyph channel is allowed to touch the first letter there. Longer words
+    // keep the first letter Latin so the model still parses them instantly.
+    const firstIndex = chars.length < 3 ? 0 : 1;
+    for (let index = firstIndex; index < chars.length; index += 1) {
+        if (HOMOGLYPHS.has(chars[index])) candidates.push(index);
     }
-    for (let index = 0; index < chars.length; index += 1) {
-        const mapped = HOMOGLYPHS.get(chars[index]);
-        if (mapped) {
-            chars[index] = mapped;
-            return chars.join('');
-        }
+    if (!candidates.length) return { word, swaps: 0 };
+
+    let rng = hashString(seed) || 0x9E3779B9;
+    const used = new Set();
+    let swaps = 0;
+    const trySwap = (index, forbidNeighbours) => {
+        if (used.has(index)) return false;
+        if (forbidNeighbours && (used.has(index - 1) || used.has(index + 1))) return false;
+        const variants = HOMOGLYPHS.get(chars[index]);
+        if (!variants?.length) return false;
+        chars[index] = variants[(rng >>> 8) % variants.length];
+        used.add(index);
+        swaps += 1;
+        return true;
+    };
+
+    // Pass 1 keeps swaps apart for readability; pass 2 only fires when the word
+    // cannot reach the profile's swap count otherwise, since raising the edit
+    // distance matters more than letter spacing once a fuzzy matcher is in play.
+    for (let attempt = 0; attempt < candidates.length * 2 && swaps < maxSwaps; attempt += 1) {
+        rng = (Math.imul(rng, 0x01000193) ^ (rng >>> 13)) >>> 0;
+        trySwap(candidates[rng % candidates.length], true);
     }
-    return word;
+    for (let attempt = 0; attempt < candidates.length * 2 && swaps < maxSwaps; attempt += 1) {
+        rng = (Math.imul(rng, 0x01000193) ^ (rng >>> 13)) >>> 0;
+        trySwap(candidates[rng % candidates.length], false);
+    }
+    return { word: chars.join(''), swaps };
 }
 
 function pickMarker(markerChars, seed) {
@@ -307,9 +349,41 @@ function pickMarker(markerChars, seed) {
     return markerChars[hashString(seed) % markerChars.length];
 }
 
+// Evenly spaced insertion points across the grapheme clusters, so two markers
+// do not stack next to each other and neither lands on a cluster boundary.
+function markerPositions(clusterCount, wanted) {
+    const positions = [];
+    const total = Math.min(wanted, Math.max(1, clusterCount - 1));
+    for (let slot = 1; slot <= total; slot += 1) {
+        const raw = Math.round((clusterCount * slot) / (total + 1));
+        const position = Math.max(1, Math.min(clusterCount - 1, raw));
+        if (!positions.includes(position)) positions.push(position);
+    }
+    return positions.sort((a, b) => a - b);
+}
+
+function insertMarkers(word, wanted, markerChars, seed) {
+    const clusters = splitGraphemes(word);
+    if (clusters.length < 2) return word;
+    const positions = markerPositions(clusters.length, Math.max(1, wanted));
+    let result = '';
+    let cursor = 0;
+    for (const position of positions) {
+        result += clusters.slice(cursor, position).join('') + pickMarker(markerChars, `${seed}\u0000${position}`);
+        cursor = position;
+    }
+    result += clusters.slice(cursor).join('');
+    return result;
+}
+
 function transformWord(word, config, seed) {
-    const next = config.useHomoglyphs ? applyHomoglyph(word) : word;
-    return insertMarkerIntoWord(next, pickMarker(config.markerChars, seed));
+    const { word: swapped, swaps } = config.useHomoglyphs
+        ? applyHomoglyphs(word, config.profile.homoglyphs, `${seed}\u0001h`)
+        : { word, swaps: 0 };
+    return {
+        text: insertMarkers(swapped, config.profile.markers, config.markerChars, seed),
+        swaps,
+    };
 }
 
 function applySingleWordMatch(match, config, seed) {
@@ -325,31 +399,47 @@ function applySingleWordMatch(match, config, seed) {
         }
     }
     if (bestIndex === -1) {
-        return insertMarkerIntoWord(match, pickMarker(config.markerChars, seed));
+        return {
+            text: insertMarkers(match, config.profile.markers, config.markerChars, seed),
+            swaps: 0,
+        };
     }
-    let result = '';
+    let text = '';
+    let swaps = 0;
     for (let index = 0; index < parts.length; index += 1) {
-        result += index === bestIndex
-            ? transformWord(parts[index].segment, config, `${seed}\u0000${index}`)
-            : parts[index].segment;
+        if (index !== bestIndex) {
+            text += parts[index].segment;
+            continue;
+        }
+        const transformed = transformWord(parts[index].segment, config, `${seed}\u0000${index}`);
+        text += transformed.text;
+        swaps += transformed.swaps;
     }
-    return result;
+    return { text, swaps };
 }
 
 function applyEveryWordMatch(match, config, seed) {
     const parts = segmentWords(match);
     let hasWord = false;
-    let result = '';
+    let text = '';
+    let swaps = 0;
     for (let index = 0; index < parts.length; index += 1) {
-        if (parts[index].isWordLike) {
-            hasWord = true;
-            result += transformWord(parts[index].segment, config, `${seed}\u0000${index}`);
-        } else {
-            result += parts[index].segment;
+        if (!parts[index].isWordLike) {
+            text += parts[index].segment;
+            continue;
         }
+        hasWord = true;
+        const transformed = transformWord(parts[index].segment, config, `${seed}\u0000${index}`);
+        text += transformed.text;
+        swaps += transformed.swaps;
     }
-    if (!hasWord) return insertMarkerIntoWord(match, pickMarker(config.markerChars, seed));
-    return result;
+    if (!hasWord) {
+        return {
+            text: insertMarkers(match, config.profile.markers, config.markerChars, seed),
+            swaps: 0,
+        };
+    }
+    return { text, swaps };
 }
 
 function transformMatch(match, rule, config, seed) {
@@ -359,16 +449,27 @@ function transformMatch(match, rule, config, seed) {
 }
 
 export function obfuscateForRule(match, rule, options = {}) {
-    const markerSet = MARKER_SETS[options.markerSet] ?? MARKER_SETS.balanced;
+    const markerSet = MARKER_SETS[options.markerSet] ?? MARKER_SETS.layered;
     const config = {
         markerChars: [...markerSet.chars],
         useHomoglyphs: Boolean(options.useHomoglyphs),
+        profile: getStrengthProfile(options.strength),
     };
     const effectiveRule = {
         pattern: String(rule?.pattern ?? match),
         allWords: Boolean(rule?.allWords),
     };
-    return transformMatch(String(match), effectiveRule, config, effectiveRule.pattern);
+    return transformMatch(String(match), effectiveRule, config, effectiveRule.pattern).text;
+}
+
+// Rebuilds the text the way a confusable-folding sanitizer would see it, so the
+// filter test can report whether a homoglyph survives that stage.
+export function foldHomoglyphsToAscii(value) {
+    let result = '';
+    for (const ch of String(value ?? '')) {
+        result += CONFUSABLE_TO_LATIN.get(ch) ?? ch;
+    }
+    return result;
 }
 
 function findProtectedRanges(text) {
@@ -421,16 +522,18 @@ function createStats() {
     return {
         replacements: 0,
         insertedMarkers: 0,
+        swappedLetters: 0,
         ruleIds: new Set(),
         samples: [],
         sampleKeys: new Set(),
     };
 }
 
-function recordReplacement(stats, rule, match, transformed) {
+function recordReplacement(stats, rule, match, transformed, swappedLetters = 0) {
     stats.replacements += 1;
     stats.ruleIds.add(rule.id);
     stats.insertedMarkers += Math.max(0, countMarkers(transformed) - countMarkers(match));
+    stats.swappedLetters += swappedLetters;
     if (stats.samples.length >= MAX_REPORT_SAMPLES) return;
     const sampleKey = `${rule.id}\u0000${match}\u0000${transformed}`;
     if (stats.sampleKeys.has(sampleKey)) return;
@@ -480,12 +583,12 @@ function applyTransform(text, matcher) {
             matcher,
             `${candidate.rule.pattern}\u0000${match}\u0000${candidate.start}`,
         );
-        if (transformed === match) continue;
+        if (transformed.text === match) continue;
 
-        output += text.slice(lastUnit, unitStart) + transformed;
+        output += text.slice(lastUnit, unitStart) + transformed.text;
         lastUnit = unitEnd;
         acceptedEnd = candidate.end;
-        recordReplacement(stats, candidate.rule, match, transformed);
+        recordReplacement(stats, candidate.rule, match, transformed.text, transformed.swaps);
     }
 
     if (lastUnit === 0) return { transformed: text, stats };
@@ -550,6 +653,7 @@ function createReport(matcher, protectedThrough) {
         textBlocks: 0,
         protectedMessages: protectedThrough >= 0 ? protectedThrough + 1 : 0,
         insertedMarkers: 0,
+        swappedLetters: 0,
         samples: [],
         _matchedRuleIds: new Set(),
         _sampleKeys: new Set(),
@@ -567,6 +671,7 @@ function applyToText(text, matcher, report) {
 
     report.replacements += stats.replacements;
     report.insertedMarkers += stats.insertedMarkers;
+    report.swappedLetters += stats.swappedLetters;
     for (const ruleId of stats.ruleIds) report._matchedRuleIds.add(ruleId);
     for (const sample of stats.samples) {
         if (report.samples.length >= MAX_REPORT_SAMPLES) break;
@@ -619,10 +724,17 @@ export function verifyFinalPayload(generateData, verificationPlan) {
     }
 
     const expectedBlocks = blocks.reduce((sum, block) => sum + (block.count ?? 0), 0);
-    if (!Array.isArray(generateData?.messages)) {
+    // Chat payloads carry messages; text-completion payloads carry one flat
+    // prompt string. Both shapes are checked, so text-mode dispatch is verified
+    // instead of silently reporting "unavailable".
+    const payloadTexts = collectSafePayloadText(generateData?.messages);
+    if (!payloadTexts.length && typeof generateData?.prompt === 'string' && generateData.prompt) {
+        payloadTexts.push(generateData.prompt);
+    }
+    if (!payloadTexts.length) {
         return {
             status: 'unavailable',
-            reason: 'final payload messages are unavailable',
+            reason: 'final payload text is unavailable',
             expectedBlocks,
             matchedBlocks: 0,
             expectedMarkers: verificationPlan.expectedMarkers ?? 0,
@@ -637,7 +749,7 @@ export function verifyFinalPayload(generateData, verificationPlan) {
     // expensive on long chats or common-word rules.
     const textCounts = new Map();
     let observedMarkers = 0;
-    for (const text of collectSafePayloadText(generateData.messages)) {
+    for (const text of payloadTexts) {
         textCounts.set(text, (textCounts.get(text) ?? 0) + 1);
         observedMarkers += countMarkers(text);
     }

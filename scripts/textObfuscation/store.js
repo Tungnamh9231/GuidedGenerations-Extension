@@ -13,11 +13,19 @@ const DEFAULTS = Object.freeze({
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     enabled: false,
     rules: [],
-    markerSet: 'balanced',
+    markerSet: 'layered',
+    strength: 'balanced',
     useHomoglyphs: false,
     stripIncoming: true,
     protectSpans: true,
 });
+
+const STRENGTHS = Object.freeze(['light', 'balanced', 'paranoid']);
+
+// Marker sets that a previous schema version could only have reached as the
+// silent default. On upgrade they move to the layered set so the payload gets
+// an Mn channel alongside the Cf one instead of dying at the first Cf-stripper.
+const LEGACY_DEFAULT_MARKER_SETS = Object.freeze(['zwsp', 'balanced']);
 
 function clone(value) {
     return typeof structuredClone === 'function'
@@ -95,15 +103,22 @@ function normalize(settings) {
         rules.push(rule);
     }
 
-    const markerSet = Object.prototype.hasOwnProperty.call(MARKER_SETS, source.markerSet)
+    const storedVersion = Number(source.schemaVersion) || 0;
+    let markerSet = Object.prototype.hasOwnProperty.call(MARKER_SETS, source.markerSet)
         ? source.markerSet
         : DEFAULTS.markerSet;
+    if (storedVersion < SETTINGS_SCHEMA_VERSION && LEGACY_DEFAULT_MARKER_SETS.includes(markerSet)) {
+        markerSet = DEFAULTS.markerSet;
+    }
+
+    const strength = STRENGTHS.includes(source.strength) ? source.strength : DEFAULTS.strength;
 
     return {
         schemaVersion: SETTINGS_SCHEMA_VERSION,
         enabled: toBoolean(source.enabled, DEFAULTS.enabled),
         rules,
         markerSet,
+        strength,
         useHomoglyphs: toBoolean(source.useHomoglyphs, DEFAULTS.useHomoglyphs),
         stripIncoming: toBoolean(source.stripIncoming, DEFAULTS.stripIncoming),
         protectSpans: toBoolean(source.protectSpans, DEFAULTS.protectSpans),

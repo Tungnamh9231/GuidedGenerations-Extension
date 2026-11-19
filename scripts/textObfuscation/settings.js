@@ -1,8 +1,10 @@
-import { ALL_MARKERS, MARKER_SETS, SETTINGS_SECTION_ID, STYLE_ID } from './constants.js';
+import { ALL_MARKERS, CONFUSABLE_TO_LATIN, MARKER_SETS, SETTINGS_SECTION_ID, STYLE_ID } from './constants.js';
 import { getTextObfuscationSettings, saveTextObfuscationSettings } from './store.js';
 import {
     buildMatcher,
+    countMarkers,
     escapeZeroWidthForDisplay,
+    foldHomoglyphsToAscii,
     obfuscateForRule,
     transformTextWithStats,
 } from './transformer.js';
@@ -33,8 +35,44 @@ function hasMixedScript(text) {
     let foreign = false;
     for (const ch of String(text ?? '')) {
         if (/[A-Za-z]/.test(ch)) latin = true;
-        else if (/[\u0400-\u04FF\u0370-\u03FF]/.test(ch)) foreign = true;
+        else if (/[\u0400-\u04FF\u0370-\u03FF\u13A0-\u13FF]/.test(ch)) foreign = true;
         if (latin && foreign) return true;
+    }
+    return false;
+}
+
+// Bounded Levenshtein: returns true when the distance is <= maxDistance.
+// Used only by the filter test to show whether a fuzzy matcher still lands.
+function withinDistance(a, b, maxDistance) {
+    if (Math.abs(a.length - b.length) > maxDistance) return false;
+    const width = b.length + 1;
+    let previous = new Array(width);
+    for (let j = 0; j < width; j += 1) previous[j] = j;
+    for (let i = 1; i <= a.length; i += 1) {
+        const current = new Array(width);
+        current[0] = i;
+        let rowMin = current[0];
+        for (let j = 1; j <= b.length; j += 1) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+            if (current[j] < rowMin) rowMin = current[j];
+        }
+        if (rowMin > maxDistance) return false;
+        previous = current;
+    }
+    return previous[b.length] <= maxDistance;
+}
+
+function hasFuzzyMatch(text, pattern, maxDistance) {
+    const haystack = String(text ?? '').toLowerCase();
+    const needle = String(pattern ?? '').toLowerCase();
+    if (!haystack || !needle) return false;
+    const minLength = Math.max(1, needle.length - maxDistance);
+    const maxLength = needle.length + maxDistance;
+    for (let length = minLength; length <= maxLength; length += 1) {
+        for (let start = 0; start + length <= haystack.length; start += 1) {
+            if (withinDistance(haystack.slice(start, start + length), needle, maxDistance)) return true;
+        }
     }
     return false;
 }
@@ -72,6 +110,11 @@ function ensureStyles() {
         #${SETTINGS_SECTION_ID} .gg-text-config-field { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; }
         #${SETTINGS_SECTION_ID} .gg-text-config-field select { min-width:0; max-width:62%; }
         #${SETTINGS_SECTION_ID} .gg-text-config-toggles { display:flex; flex-wrap:wrap; gap:5px; }
+        #${SETTINGS_SECTION_ID} .gg-text-example { display:flex; flex-direction:column; gap:6px; padding:8px 9px; border:1px solid var(--SmartThemeBorderColor); border-radius:9px; background:rgba(127,127,127,.03); }
+        #${SETTINGS_SECTION_ID} .gg-text-example-input { width:100%; min-width:0; }
+        #${SETTINGS_SECTION_ID} .gg-text-example-output { padding:6px 8px; border:1px dashed var(--SmartThemeBorderColor); border-radius:7px; background:rgba(127,127,127,.05); font:11px/1.5 var(--monoFontFamily, monospace); overflow-wrap:anywhere; }
+        #${SETTINGS_SECTION_ID} .gg-text-example-output.is-empty { opacity:.55; }
+        #${SETTINGS_SECTION_ID} .gg-text-example-meta { opacity:.7; font:9px/1.4 var(--monoFontFamily, monospace); overflow-wrap:anywhere; }
         #${SETTINGS_SECTION_ID} .gg-text-sim { display:flex; flex-direction:column; gap:7px; padding:8px 9px; border:1px solid var(--SmartThemeBorderColor); border-radius:9px; background:rgba(127,127,127,.03); }
         #${SETTINGS_SECTION_ID} .gg-text-sim-result { display:flex; flex-direction:column; gap:4px; font:10px/1.45 var(--monoFontFamily, monospace); }
         #${SETTINGS_SECTION_ID} .gg-text-sim-row { display:flex; align-items:baseline; gap:6px; overflow-wrap:anywhere; }
@@ -181,9 +224,13 @@ export class TextObfuscationSettingsView {
         this.lastReport = null;
         this.enabledInput = null;
         this.markerSetSelect = null;
+        this.strengthSelect = null;
         this.homoglyphInput = null;
         this.stripIncomingInput = null;
         this.protectSpansInput = null;
+        this.exampleInput = null;
+        this.exampleOutput = null;
+        this.exampleMeta = null;
         this.addInput = null;
         this.addButton = null;
         this.ruleList = null;
@@ -228,7 +275,7 @@ export class TextObfuscationSettingsView {
                 <div class="gg-text-obfuscation-head">
                     <div>
                         <div class="gg-text-obfuscation-title"><i class="fa-solid fa-text-width"></i> Zero-width text transform</div>
-                        <small class="setting_item_description">Thêm từng từ/cụm từ thành rule riêng. Ký tự vô hình được chèn giữa từ (không chen vào dấu kết hợp), có thể đổi bộ ký tự, thêm chữ ngoại quốc giống hệt, bảo vệ code/URL và tự dọn marker ở tin nhắn AI trả về. Áp dụng cho chat/text completion và các công cụ generate của extension; chat lưu và shape payload không bị rebuild.</small>
+                        <small class="setting_item_description">Thêm từng từ/cụm từ thành rule riêng. Chèn ký tự vô hình vào giữa từ (không chen vào dấu kết hợp), có thể đổi kênh ký tự, thay thêm chữ ngoại quốc giống hệt, bảo vệ code/URL và tự dọn marker ở tin nhắn AI trả về. Ba kênh được xếp lớp — Cf (ZWSP/WJ), Mn (CGJ/variation selector, sống sót cả bộ lọc xoá Cf) và homoglyph không bị NFKC gộp về ASCII — nên mỗi tầng sanitizer chỉ gỡ được một kênh. Áp dụng cho chat/text completion và các công cụ generate của extension; chat lưu và shape payload không bị rebuild.</small>
                     </div>
                     <label class="gg-text-obfuscation-toggle" title="Bật xử lý cho mọi generation (chat/text completion và công cụ extension).">
                         <input type="checkbox" class="gg-text-obfuscation-enable">
@@ -237,11 +284,15 @@ export class TextObfuscationSettingsView {
                 </div>
                 <div class="gg-text-config">
                     <label class="gg-text-config-field">
-                        <span title="Bộ ký tự vô hình dùng để chèn. Bộ càng lạ càng khó bị bộ lọc dọn sạch, nhưng AI có thể đọc kém tự nhiên hơn.">Marker set</span>
+                        <span title="Kênh ký tự vô hình dùng để chèn. Cf = ký tự format (bị bộ lọc xoá Cf gỡ). Mn = dấu kết hợp CGJ/variation selector (sống sót bộ lọc xoá Cf, chỉ chết khi bộ lọc xoá cả dấu kết hợp). Layered = trộn cả hai nên bộ lọc nào cũng chỉ gỡ được một nửa. Extreme thêm Hangul filler.">Marker set</span>
                         <select class="text_pole gg-text-marker-set"></select>
                     </label>
+                    <label class="gg-text-config-field">
+                        <span title="Mật độ biến đổi trên mỗi từ khoá. Light = 1 marker + 1 homoglyph. Balanced = 1 marker + 2 homoglyph. Paranoid = 2 marker + 3 homoglyph — dùng khi bộ lọc có fuzzy/Levenshtein ≤ 2.">Evasion strength</span>
+                        <select class="text_pole gg-text-strength"></select>
+                    </label>
                     <div class="gg-text-config-toggles">
-                        <label class="gg-text-rule-option" title="Thay một chữ Latin trong từ bằng chữ ngoại quốc nhìn giống hệt (Cyrillic). Sống sót cả bộ lọc xoá mọi ký tự vô hình, nhưng mặt chữ thay đổi thật và có thể bị máy phát hiện trộn bảng chữ.">
+                        <label class="gg-text-rule-option" title="Thay chữ Latin trong từ bằng chữ ngoại quốc nhìn giống hệt (Cyrillic / Greek / Coptic / Cherokee). Sống sót cả bộ lọc xoá mọi ký tự vô hình lẫn bộ lọc whitelist ASCII; chỉ chết trước bộ lọc skeleton/confusable hoặc fuzzy. Bảng chọn chỉ dùng ký tự KHÔNG bị NFKC gộp về ASCII — nếu bị gộp, payload sẽ khớp lại sau normalize.">
                             <input type="checkbox" class="gg-text-use-homoglyphs"><span>Homoglyph letters</span>
                         </label>
                         <label class="gg-text-rule-option" title="Tự xoá ký tự vô hình khỏi tin nhắn AI trả về để chat sạch, không tích tụ marker qua nhiều lượt.">
@@ -251,6 +302,12 @@ export class TextObfuscationSettingsView {
                             <input type="checkbox" class="gg-text-protect-spans"><span>Protect code &amp; URLs</span>
                         </label>
                     </div>
+                </div>
+                <div class="gg-text-example">
+                    <div class="gg-text-obfuscation-title"><i class="fa-solid fa-eye"></i> Live example</div>
+                    <input type="text" class="text_pole gg-text-example-input" spellcheck="false" value="hello world" placeholder="Gõ một từ để xem nó biến đổi thế nào…">
+                    <div class="gg-text-example-output"></div>
+                    <div class="gg-text-example-meta"></div>
                 </div>
                 <div class="gg-text-rule-add">
                     <input type="text" class="text_pole gg-text-rule-add-input" spellcheck="false" placeholder="Nhập từ hoặc cụm từ…">
@@ -282,10 +339,14 @@ export class TextObfuscationSettingsView {
         this.section = section;
         this.enabledInput = section.querySelector('.gg-text-obfuscation-enable');
         this.markerSetSelect = section.querySelector('.gg-text-marker-set');
+        this.strengthSelect = section.querySelector('.gg-text-strength');
         this.homoglyphInput = section.querySelector('.gg-text-use-homoglyphs');
         this.stripIncomingInput = section.querySelector('.gg-text-strip-incoming');
         this.protectSpansInput = section.querySelector('.gg-text-protect-spans');
         this.addInput = section.querySelector('.gg-text-rule-add-input');
+        this.exampleInput = section.querySelector('.gg-text-example-input');
+        this.exampleOutput = section.querySelector('.gg-text-example-output');
+        this.exampleMeta = section.querySelector('.gg-text-example-meta');
         this.addButton = section.querySelector('.gg-text-rule-add-button');
         this.ruleList = section.querySelector('.gg-text-rule-list');
         this.simInput = section.querySelector('.gg-text-sim-input');
@@ -302,6 +363,17 @@ export class TextObfuscationSettingsView {
             this.markerSetSelect.appendChild(option);
         }
 
+        for (const [value, label] of [
+            ['light', 'Light — 1 marker · 1 homoglyph'],
+            ['balanced', 'Balanced — 1 marker · 2 homoglyphs'],
+            ['paranoid', 'Paranoid — 2 markers · 3 homoglyphs'],
+        ]) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            this.strengthSelect.appendChild(option);
+        }
+
         this.enabledInput.addEventListener('change', () => {
             const current = getTextObfuscationSettings();
             current.enabled = this.enabledInput.checked;
@@ -312,6 +384,13 @@ export class TextObfuscationSettingsView {
         this.markerSetSelect.addEventListener('change', () => {
             const current = getTextObfuscationSettings();
             current.markerSet = this.markerSetSelect.value;
+            saveTextObfuscationSettings(current);
+            this.lastReport = null;
+            this.renderState();
+        });
+        this.strengthSelect.addEventListener('change', () => {
+            const current = getTextObfuscationSettings();
+            current.strength = this.strengthSelect.value;
             saveTextObfuscationSettings(current);
             this.lastReport = null;
             this.renderState();
@@ -330,6 +409,7 @@ export class TextObfuscationSettingsView {
         saveToggle(this.protectSpansInput, 'protectSpans');
 
         this.addButton.addEventListener('click', () => this.addRule());
+        this.exampleInput.addEventListener('input', () => this.renderExample());
         this.addInput.addEventListener('keydown', event => {
             if (event.key === 'Enter') {
                 event.preventDefault();
@@ -430,11 +510,20 @@ export class TextObfuscationSettingsView {
             return '';
         };
 
+        // One stage per sanitizer class a real filter may implement, cheapest
+        // first. A stage that reports "đã phá" only means that stage alone
+        // cannot reconstruct the keyword.
+        const stripCf = value => value.replace(/\p{Cf}/gu, '');
+        const stripCfMn = value => value.replace(/[\p{Cf}\p{Mn}]/gu, '');
+        const asciiOnly = value => value.replace(/[^A-Za-z0-9\s]/gu, '').replace(/\s+/gu, ' ');
         const stages = [
             ['Nguyên bản', transformed],
-            ['Bỏ ký tự vô hình', transformed.replace(/\p{Cf}/gu, '')],
-            ['NFKC + bỏ ký tự vô hình', transformed.normalize('NFKC').replace(/\p{Cf}/gu, '')],
-            ['Gộp khoảng trắng + bỏ ký tự vô hình', transformed.replace(/\p{Cf}/gu, '').replace(/\s+/gu, ' ')],
+            ['Bỏ ký tự vô hình Cf', stripCf(transformed)],
+            ['NFKC + bỏ Cf', stripCf(transformed.normalize('NFKC'))],
+            ['Bỏ Cf + dấu kết hợp Mn', stripCfMn(transformed)],
+            ['Chỉ giữ ASCII [A-Za-z0-9]', asciiOnly(transformed)],
+            ['Gộp khoảng trắng + bỏ Cf/Mn', stripCfMn(transformed).replace(/\s+/gu, ' ')],
+            ['Skeleton homoglyph + bỏ Cf/Mn', stripCfMn(foldHomoglyphsToAscii(transformed))],
         ];
         for (const [label, text] of stages) {
             const hit = survivingPattern(text);
@@ -443,14 +532,64 @@ export class TextObfuscationSettingsView {
                 : createSimRow('pass', `${label}: đã phá từ khóa`, ''));
         }
 
+        const fuzzyTargets = [
+            ['Fuzzy distance ≤ 1 trên skeleton', stripCfMn(foldHomoglyphsToAscii(transformed)), 1],
+            ['Fuzzy distance ≤ 2 trên skeleton', stripCfMn(foldHomoglyphsToAscii(transformed)), 2],
+        ];
+        for (const [label, text, maxDistance] of fuzzyTargets) {
+            const hit = matchedRules.find(rule => hasFuzzyMatch(text, rule.pattern, maxDistance));
+            this.simResult.appendChild(hit
+                ? createSimRow('block', `${label}: khớp gần “${hit.pattern}”`, '')
+                : createSimRow('pass', `${label}: ngoài ngưỡng`, ''));
+        }
+
         this.simResult.appendChild(hasMixedScript(transformed)
-            ? createSimRow('warn', 'Trộn bảng chữ Latin + Cyrillic/Greek — homoglyph có tác dụng nhưng máy có thể phát hiện.', '')
+            ? createSimRow('warn', 'Trộn bảng chữ Latin + Cyrillic/Greek — homoglyph có tác dụng nhưng máy có thể phát hiện dấu hiệu trộn script.', '')
             : createSimRow('pass', 'Không trộn bảng chữ.', ''));
         this.simResult.appendChild(createSimRow(
             'pass',
-            `${stats.replacements} chỗ đã biến đổi · ${stats.insertedMarkers} marker được chèn.`,
+            `${stats.replacements} chỗ đã biến đổi · ${stats.insertedMarkers} marker được chèn · ${stats.swappedLetters} chữ đã thay homoglyph.`,
             display,
         ));
+    }
+
+    // What the selected marker set + strength actually do to a sample word. This
+    // is a pure preview: it does not use the rule list, so the effect of the
+    // Unicode mode is visible before any rule exists.
+    renderExample() {
+        if (!this.exampleOutput) return;
+        const sample = String(this.exampleInput?.value ?? '').replace(/\s+/gu, ' ').trim().slice(0, 160);
+        if (!sample) {
+            this.exampleOutput.classList.add('is-empty');
+            this.exampleOutput.textContent = '—';
+            this.exampleMeta.textContent = 'Nhập một từ để xem nó biến đổi thế nào với cài đặt hiện tại.';
+            return;
+        }
+
+        const settings = getTextObfuscationSettings();
+        const options = {
+            markerSet: settings.markerSet,
+            strength: settings.strength,
+            useHomoglyphs: settings.useHomoglyphs,
+        };
+
+        let transformed = sample;
+        try {
+            transformed = obfuscateForRule(sample, { pattern: sample, allWords: true }, options);
+        } catch (error) {
+            console.debug('[GG Unicode Sensitive Words] Example preview failed.', error);
+        }
+
+        let swaps = 0;
+        for (const ch of transformed) {
+            if (CONFUSABLE_TO_LATIN.has(ch)) swaps += 1;
+        }
+
+        this.exampleOutput.classList.remove('is-empty');
+        this.exampleOutput.textContent = escapeZeroWidthForDisplay(transformed);
+        const setLabel = MARKER_SETS[settings.markerSet]?.label ?? settings.markerSet;
+        const status = settings.enabled ? '' : ' · transform đang tắt';
+        this.exampleMeta.textContent = `${countMarkers(transformed)} marker · ${swaps} homoglyph · ${setLabel} · strength ${settings.strength}${settings.useHomoglyphs ? '' : ' · homoglyph off'}${status}`;
     }
 
     renderRules(rules, options) {
@@ -519,20 +658,24 @@ export class TextObfuscationSettingsView {
         const settings = getTextObfuscationSettings();
         this.enabledInput.checked = settings.enabled;
         this.markerSetSelect.value = settings.markerSet;
+        this.strengthSelect.value = settings.strength;
         this.homoglyphInput.checked = settings.useHomoglyphs;
         this.stripIncomingInput.checked = settings.stripIncoming;
         this.protectSpansInput.checked = settings.protectSpans;
         this.renderRules(settings.rules, {
             markerSet: settings.markerSet,
+            strength: settings.strength,
             useHomoglyphs: settings.useHomoglyphs,
         });
         const setLabel = MARKER_SETS[settings.markerSet]?.label ?? settings.markerSet;
         const extras = [
+            `strength ${settings.strength}`,
             settings.useHomoglyphs ? 'homoglyphs on' : 'homoglyphs off',
             settings.protectSpans ? 'code/URL protected' : 'code/URL unprotected',
             settings.stripIncoming ? 'AI replies stripped' : 'AI replies kept',
         ].join(' · ');
         this.meta.textContent = `${settings.rules.length} rule(s) · longest phrase first · ${setLabel} · ${extras} · final-payload + network-dispatch verification enabled`;
+        this.renderExample();
 
         this.status.className = 'gg-text-obfuscation-status';
         this.samples.replaceChildren();
@@ -565,7 +708,7 @@ export class TextObfuscationSettingsView {
         if (verification?.status === 'verified' && !dispatchBad) this.status.classList.add('is-ok');
         else if (verificationBad || dispatchBad || this.lastReport.replacements === 0) this.status.classList.add('is-warn');
 
-        const transformLine = `Last transform: ${this.lastReport.replacements} replacement(s) · ${this.lastReport.matchedPatterns} matched rule(s) · ${this.lastReport.textBlocks} text block(s)${protectedText}`;
+        const transformLine = `Last transform: ${this.lastReport.replacements} replacement(s) · ${this.lastReport.matchedPatterns} matched rule(s) · ${this.lastReport.textBlocks} text block(s) · ${this.lastReport.insertedMarkers ?? 0} marker(s) · ${this.lastReport.swappedLetters ?? 0} homoglyph(s)${protectedText}`;
         const verificationLine = describeVerification(verification);
         const dispatchLine = describeDispatch(dispatch);
         this.status.textContent = `${transformLine}\n${verificationLine}\n${dispatchLine}`;
