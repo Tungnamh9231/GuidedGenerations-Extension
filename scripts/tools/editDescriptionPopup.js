@@ -11,14 +11,12 @@ import {
     getContext,
     extension_settings,
     debugLog,
-    activateSendButtons,
-    deactivateSendButtons,
-    setSendButtonState,
     getPromptValue,
     fillPromptTemplate
 } from '../persistentGuides/guideExports.js'; // Import from central hub
-import { openRequestPromptSlot, closeRequestPromptSlot } from '../promptManager/store.js';
 import descriptionHistory from './descriptionHistory.js';
+import { buildRecentScene, looksLikeRefusal } from '../utils/generationGuards.js';
+import { runCardGeneration } from '../utils/cardGeneration.js';
 
 
 
@@ -1145,84 +1143,52 @@ export class EditDescriptionPopup {
                     : (formatList ? 'editDescription.makeNewWithFormat' : 'editDescription.makeNew');
             const readTemplate = key => getPromptValue(`editDescription.${key}`, '', { settings: extension_settings[extensionName] });
 
+            const characterForPrompt = this._pendingCharacter || this._getCurrentCharacter() || {};
+            const promptVars = {
+                instruction,
+                currentDescription,
+                formatList,
+                characterName: characterForPrompt?.name || context?.name2 || 'The character',
+                userName: context?.name1 || 'You',
+                recentScene: buildRecentScene(context),
+            };
+
             let promptText = '';
             if (mode === 'editExisting') {
-                promptText = fillPromptTemplate(await readTemplate('editExisting'), { instruction, currentDescription, formatList });
+                promptText = fillPromptTemplate(await readTemplate('editExisting'), promptVars);
             } else if (mode === 'createWorld') {
-                promptText = fillPromptTemplate(await readTemplate('createWorld'), { instruction, formatList });
+                promptText = fillPromptTemplate(await readTemplate('createWorld'), promptVars);
             } else {
-                promptText = fillPromptTemplate(await readTemplate(formatList ? 'makeNewWithFormat' : 'makeNew'), { instruction, formatList });
+                promptText = fillPromptTemplate(await readTemplate(formatList ? 'makeNewWithFormat' : 'makeNew'), promptVars);
             }
 
-            let generatedDescription = '';
+            // Priming, profile/preset handling, the refusal retry and output
+            // cleanup all live in the shared pipeline so both card tools behave
+            // the same way. A formatted description keeps its own labels, so the
+            // leading-label cleanup is disabled for that mode.
+            const generatedDescription = await runCardGeneration({
+                promptKey,
+                promptText,
+                profileField: 'profileEditDescription',
+                presetField: 'presetEditDescription',
+                debugLabel: 'edit-description',
+                stripLeadingLabel: !formatList,
+            });
 
-            debugLog('[EditDescription] Using /gen with chat isolation...');
-
-            const originalChat = [...(context.chat || [])];
-            let requestSlot = '';
-            if (context.chat) {
-                context.chat.length = 0;
-                // Chat completion: the task prompt is announced to the extension
-                // Prompt Manager, which decides where it is sent. Text completion
-                // has no prompt manager, so keep the old single-message approach.
-                if (context.mainApi === 'openai') {
-                    requestSlot = openRequestPromptSlot(context, promptKey, promptText);
+            if (generatedDescription && looksLikeRefusal(generatedDescription)) {
+                console.warn('[GuidedGenerations][EditDescription] Model returned a refusal instead of a description:', generatedDescription);
+                alert(
+                    'The model refused to write the description, so nothing was applied.\n\n' +
+                    'Assign an uncensored connection in Guided Generations settings \u2192 Edit Description \u2192 Profile / Preset, ' +
+                    'or reset the Edit Description prompt templates in the extension Prompt Manager.'
+                );
+                if (!isEditExisting) {
+                    this._restoreDescriptionAfterFailedGeneration(descriptionTextarea, previousDescriptionRaw, this._pendingCharacter);
                 }
-                if (!requestSlot) {
-                    // Push the prompt as a User message in isolated context
-                    context.chat.push({
-                        name: 'User',
-                        is_user: true,
-                        is_system: false,
-                        send_date: Date.now(),
-                        mes: promptText,
-                        extra: { type: 'temp_desc_gen' }
-                    });
-                }
+                this._pendingCharacter = null;
+                return;
             }
 
-            // Toggle send button state to show generation is happening
-            setSendButtonState?.(true);
-            try {
-                activateSendButtons?.();
-                const $sendButton = $('#send_but');
-                if ($sendButton.length) {
-                    $sendButton.removeClass('fa-paper-plane').addClass('fa-stop-circle');
-                }
-            } catch (e) {
-                /* ignore */
-            }
-
-            try {
-                const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
-                    showOutput: false,
-                    handleExecutionErrors: true,
-                });
-                generatedDescription = genResult?.pipe || '';
-            } catch (fallbackError) {
-                console.error('[GuidedGenerations] Description generation failed:', fallbackError);
-            } finally {
-                closeRequestPromptSlot(context, requestSlot);
-                if (context.chat) {
-                    context.chat.length = 0;
-                    context.chat.push(...originalChat);
-                    if (typeof context.saveChat === 'function') await context.saveChat();
-                    if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-                }
-            }
-
-            // Resync send/stop controls
-            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-            try {
-                activateSendButtons?.();
-                setSendButtonState?.(false);
-                const $sendButton = $('#send_but');
-                if ($sendButton.length) {
-                    $sendButton.removeClass('fa-stop-circle').addClass('fa-paper-plane');
-                }
-            } catch (_) {
-                /* ignore if SillyTavern API differs */
-            }
             if (!generatedDescription || generatedDescription.trim() === '') {
                 console.error('[GuidedGenerations] No description text received.');
                 if (!isEditExisting) {

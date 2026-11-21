@@ -6,43 +6,23 @@ import {
     extension_settings,
     extensionName,
     debugLog,
-    requestCompletion,
-    shouldUseDirectCall,
     getPromptValue,
     fillPromptTemplate,
-    deactivateSendButtons,
-    activateSendButtons,
-    setSendButtonState,
 } from '../persistentGuides/guideExports.js';
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
-import { registerInjectionPromptSlot } from '../promptManager/store.js';
+import { buildSceneBefore, looksLikeRefusal, sanitizeCardOutput } from '../utils/generationGuards.js';
+import { runCardGeneration } from '../utils/cardGeneration.js';
 
 let lastCorrectionInstruction = '';
 
-const SCRIPT_PROMPT_KEY = 'script_inject_';
-const INJECT_POSITIONS = { chat: 1 };
-const INJECT_ROLES = { system: 0, user: 1, assistant: 2 };
-
-function setTemporaryInjection(context, id, value, { position = INJECT_POSITIONS.chat, depth = 0, scan = true, role = INJECT_ROLES.system } = {}) {
-    if (!context.chatMetadata) context.chatMetadata = {};
-    if (!context.chatMetadata.script_injects) context.chatMetadata.script_injects = {};
-    context.chatMetadata.script_injects[id] = { value, position, depth, scan, role, filter: null };
-    context.setExtensionPrompt?.(`${SCRIPT_PROMPT_KEY}${id}`, value, position, depth, scan, role);
-    context.saveMetadataDebounced?.();
-}
-
-function flushTemporaryInjection(context, id) {
-    const existingInject = context.chatMetadata?.script_injects?.[id];
-    const position = existingInject?.position ?? INJECT_POSITIONS.chat;
-    const depth = existingInject?.depth ?? 0;
-    const scan = existingInject?.scan ?? true;
-    const role = existingInject?.role ?? INJECT_ROLES.system;
-
-    if (context.chatMetadata?.script_injects) {
-        delete context.chatMetadata.script_injects[id];
-    }
-    context.setExtensionPrompt?.(`${SCRIPT_PROMPT_KEY}${id}`, '', position, depth, scan, role);
-    context.saveMetadataDebounced?.();
+// /genraw sends the task prompt with no preset and no prompt manager involved.
+async function runRawGeneration(context, promptText) {
+    const escapedPrompt = String(promptText).replace(/\r?\n/g, '{{newline}}');
+    const result = await context.executeSlashCommandsWithOptions(`/genraw quiet=true ${escapedPrompt} |`, {
+        showOutput: false,
+        handleExecutionErrors: true,
+    });
+    return sanitizeCardOutput(result?.pipe || '', { stripLeadingLabel: false });
 }
 
 function escapeHtml(value = '') {
@@ -582,7 +562,7 @@ class CorrectionsPopup {
         });
         const promptForModel = fillPromptTemplate(taskTemplate, {
             instruction: filledPrompt,
-            historyBlock: '', // No history block in prompt template
+            historyBlock: buildSceneBefore(context, this.messageIndex),
             baseMessage,
             selectedText,
         });
@@ -590,81 +570,33 @@ class CorrectionsPopup {
         debugLog(`[GuidedGenerations][Corrections] Using profile: ${profileValue || 'current'}, preset: ${targetPreset || 'none'}`);
 
         try {
-            const useDirectCall = await shouldUseDirectCall(profileValue, targetPreset);
             let correctedText = '';
 
-            // Close the popup and lock the send button so the user sees that
-            // a generation is in progress (matching spellchecker/requestCompletion behavior).
-            this.close();
-            setSendButtonState?.(true);
-            deactivateSendButtons?.();
-
-            try {
-                if (useDirectCall && !this.sendWithoutPreset) {
-                    correctedText = await requestCompletion({
-                        profileName: profileValue,
-                        presetName: targetPreset,
-                        prompt: promptForModel,
-                        promptKey: taskPromptKey,
-                        debugLabel: 'corrections',
-                        includeChatHistory: false,
-                        includeIdentityContext: true,
-                    });
-                } else if (typeof context.executeSlashCommandsWithOptions === 'function') {
-                    if (this.sendWithoutPreset) {
-                        const escapedPrompt = promptForModel.replace(/\r?\n/g, '{{newline}}');
-                        const result = await context.executeSlashCommandsWithOptions(`/genraw quiet=true ${escapedPrompt} |`, {
-                            showOutput: false,
-                            handleExecutionErrors: true,
-                        });
-                        correctedText = result?.pipe || '';
-                    } else {
-                        const injectionRole = extension_settings[extensionName]?.injectionEndRole ?? 'system';
-                        const role = INJECT_ROLES[String(injectionRole).toLowerCase()] ?? INJECT_ROLES.system;
-                        registerInjectionPromptSlot('script_inject_correctionsInstruct', taskPromptKey);
-                        setTemporaryInjection(context, 'correctionsInstruct', promptForModel, { role });
-
-                        const originalChat = [...(context.chat || [])];
-                        if (context.chat) {
-                            context.chat.length = 0;
-                            // Add dummy system message to prevent greeting generation
-                            context.chat.push({
-                                name: 'System',
-                                is_user: false,
-                                is_system: true,
-                                send_date: Date.now(),
-                                mes: 'Applying correction...',
-                                extra: { type: 'temp_correction_gen' }
-                            });
-                        }
-
-                        try {
-                            const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
-                                showOutput: false,
-                                handleExecutionErrors: true,
-                            });
-                            correctedText = genResult?.pipe || '';
-                        } finally {
-                            flushTemporaryInjection(context, 'correctionsInstruct');
-                            if (context.chat) {
-                                context.chat.length = 0;
-                                context.chat.push(...originalChat);
-                                if (typeof context.saveChat === 'function') await context.saveChat();
-                                if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-                            }
-                        }
-                    }
-                } else {
-                    console.error('[GuidedGenerations][Corrections] context.executeSlashCommandsWithOptions not found.');
-                }
-            } finally {
-                activateSendButtons?.();
-                setSendButtonState?.(false);
-                requestAnimationFrame(() => {
-                    activateSendButtons?.();
-                    setSendButtonState?.(false);
+            if (this.sendWithoutPreset) {
+                correctedText = await runRawGeneration(context, promptForModel);
+            } else {
+                // Real history, the assigned profile/preset, the refusal retry
+                // and output cleanup all come from the shared pipeline.
+                correctedText = await runCardGeneration({
+                    promptKey: taskPromptKey,
+                    promptText: promptForModel,
+                    profileField: profileKey,
+                    presetField: presetKey,
+                    debugLabel: 'corrections',
+                    stripLeadingLabel: false,
                 });
             }
+
+            if (looksLikeRefusal(correctedText)) {
+                console.warn('[GuidedGenerations][Corrections] Model refused the correction:', correctedText);
+                alert(
+                    'The model refused to rewrite the message, so nothing was applied.\n\n' +
+                    'Assign an uncensored connection in Guided Generations settings → Corrections → Profile / Preset, ' +
+                    'or reset the Corrections prompt templates in the extension Prompt Manager.'
+                );
+                return;
+            }
+
 
             if (!correctedText || correctedText.trim() === '') {
                 console.error('[GuidedGenerations][Corrections] No corrected text received.');

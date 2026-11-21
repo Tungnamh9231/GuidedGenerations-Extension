@@ -11,14 +11,12 @@ import {
     extensionName,
     extension_settings,
     getContext,
-    debugLog,
-    activateSendButtons,
-    setSendButtonState,
     getPromptValue,
     fillPromptTemplate
 } from '../persistentGuides/guideExports.js';
 import { appendSwipeToMessage } from '../utils/swipeHelpers.js';
-import { openRequestPromptSlot, closeRequestPromptSlot } from '../promptManager/store.js';
+import { buildCharacterSheet, buildRecentScene, looksLikeRefusal } from '../utils/generationGuards.js';
+import { runCardGeneration } from '../utils/cardGeneration.js';
 
 export class EditIntrosPopup {
     constructor() {
@@ -272,7 +270,7 @@ export class EditIntrosPopup {
             }
 
             const template = await getPromptValue('editIntros.editExisting', '', { settings: extension_settings[extensionName] });
-            const promptText = fillPromptTemplate(template, { instruction, messageToRewrite });
+            const promptText = fillPromptTemplate(template, this._buildPromptVars(context, { instruction, messageToRewrite }));
 
             await this.executeGeneration(context, promptText, 'editIntros.editExisting');
         } catch (error) {
@@ -301,88 +299,56 @@ export class EditIntrosPopup {
             }
 
             const template = await getPromptValue('editIntros.makeNew', '', { settings: extension_settings[extensionName] });
-            const promptText = fillPromptTemplate(template, { instruction });
+            const promptText = fillPromptTemplate(template, this._buildPromptVars(context, { instruction }));
             await this.executeGeneration(context, promptText, 'editIntros.makeNew');
         } catch (error) {
             console.error('[GuidedGenerations] Error executing Make New Intro request:', error);
         }
     }
 
+    _buildPromptVars(context, extra = {}) {
+        const character = context?.characters?.[context.characterId] || {};
+        return {
+            characterName: character?.name || context?.name2 || 'The character',
+            userName: context?.name1 || 'You',
+            characterSheet: buildCharacterSheet(character),
+            recentScene: buildRecentScene(context),
+            ...extra,
+        };
+    }
+
     async executeGeneration(context, promptText, promptKey) {
-        const originalChat = [...(context.chat || [])];
-        let requestSlot = '';
+        // Priming, profile/preset handling, the refusal retry and output
+        // cleanup all live in the shared pipeline so both card tools behave
+        // the same way.
+        const generatedIntro = await runCardGeneration({
+            promptKey,
+            promptText,
+            profileField: 'profileEditIntros',
+            presetField: 'presetEditIntros',
+            debugLabel: 'edit-intros',
+        });
 
-        // Isolate chat context
-        if (context.chat) {
-            context.chat.length = 0;
-            // Chat completion: the task prompt is announced to the extension
-            // Prompt Manager, which decides where it is sent. Text completion
-            // has no prompt manager, so keep the old single-message approach.
-            if (context.mainApi === 'openai') {
-                requestSlot = openRequestPromptSlot(context, promptKey, promptText);
-            }
-            if (!requestSlot) {
-                context.chat.push({
-                    name: 'User',
-                    is_user: true,
-                    is_system: false,
-                    send_date: Date.now(),
-                    mes: promptText,
-                    extra: { type: 'temp_intro_gen' }
-                });
-            }
-        }
+        await this._shipIntro(context, generatedIntro);
+    }
 
-        setSendButtonState?.(true);
-        try {
-            activateSendButtons?.();
-            const $sendButton = $('#send_but');
-            if ($sendButton.length) {
-                $sendButton.removeClass('fa-paper-plane').addClass('fa-stop-circle');
-            }
-        } catch (e) {
-            /* ignore */
-        }
-
-        let generatedIntro = '';
-        try {
-            debugLog('[EditIntros] Using /gen with injected prompt at end of chat...');
-            const genResult = await context.executeSlashCommandsWithOptions(`/gen quiet=true |`, {
-                showOutput: false,
-                handleExecutionErrors: true,
-            });
-            generatedIntro = genResult?.pipe || '';
-        } catch (genError) {
-            console.error('[GuidedGenerations] Intro generation failed:', genError);
-        } finally {
-            closeRequestPromptSlot(context, requestSlot);
-            if (context.chat) {
-                context.chat.length = 0;
-                context.chat.push(...originalChat);
-                if (typeof context.saveChat === 'function') await context.saveChat();
-                if (typeof context.reloadCurrentChat === 'function') await context.reloadCurrentChat();
-            }
-        }
-
-        // Resync UI buttons
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        try {
-            activateSendButtons?.();
-            setSendButtonState?.(false);
-            const $sendButton = $('#send_but');
-            if ($sendButton.length) {
-                $sendButton.removeClass('fa-stop-circle').addClass('fa-paper-plane');
-            }
-        } catch (e) {
-            /* ignore */
-        }
-
-        if (!generatedIntro || generatedIntro.trim() === '') {
+    async _shipIntro(context, introText) {
+        if (!introText || introText.trim() === '') {
             console.error('[GuidedGenerations] No generated intro text received.');
             return;
         }
 
-        await this.applyIntroUpdate(context, generatedIntro);
+        if (looksLikeRefusal(introText)) {
+            console.warn('[GuidedGenerations][EditIntros] Model returned a refusal instead of an intro:', introText);
+            alert(
+                'The model refused to write the intro, so nothing was applied.\n\n' +
+                'Assign an uncensored connection in Guided Generations settings → Edit Intros → Profile / Preset, ' +
+                'or reset the Edit Intros prompt templates in the extension Prompt Manager.'
+            );
+            return;
+        }
+
+        await this.applyIntroUpdate(context, introText.trim());
     }
 
     async applyIntroUpdate(context, introText) {
